@@ -20,24 +20,28 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>World Cup 2026 Pick'em</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700;900&display=swap" rel="stylesheet">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  background: #060d1a;
-  color: #e2e8f0;
+  background: #051208;
+  color: #e8f3ea;
   min-height: 100vh;
 }
 
+/* Pitch stripes + stadium floodlight glow */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
   background-image:
-    repeating-linear-gradient(0deg, transparent, transparent 40px, rgba(255,255,255,0.015) 40px, rgba(255,255,255,0.015) 41px),
-    radial-gradient(ellipse at 20% 50%, rgba(16,185,129,0.06) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 30%, rgba(59,130,246,0.06) 0%, transparent 60%);
+    repeating-linear-gradient(115deg, rgba(255,255,255,0.018) 0px, rgba(255,255,255,0.018) 60px, transparent 60px, transparent 120px),
+    radial-gradient(ellipse at 15% 0%, rgba(250,204,21,0.07) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 10%, rgba(34,197,94,0.10) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 100%, rgba(34,197,94,0.06) 0%, transparent 60%);
   pointer-events: none;
   z-index: 0;
 }
@@ -46,9 +50,9 @@ body::before {
 
 /* ── Header ── */
 .header {
-  background: rgba(15,23,42,0.95);
+  background: linear-gradient(180deg, rgba(6,30,16,0.97) 0%, rgba(8,38,20,0.95) 100%);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid #1e293b;
+  border-bottom: 2px solid rgba(250,204,21,0.25);
   padding: 20px 32px;
   display: flex;
   align-items: center;
@@ -56,20 +60,20 @@ body::before {
   position: sticky; top: 0; z-index: 10;
 }
 .header h1 {
-  font-size: 26px; font-weight: 900;
-  background: linear-gradient(135deg, #10b981 0%, #3b82f6 100%);
+  font-family: 'Oswald', sans-serif;
+  font-size: 28px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #facc15 0%, #22c55e 60%, #16a34a 100%);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-  letter-spacing: -0.5px;
 }
-.header-sub { color: #475569; font-size: 13px; margin-top: 3px; }
+.header-sub { color: #5b7a64; font-size: 13px; margin-top: 3px; letter-spacing: 0.3px; }
 .live-badge {
   display: flex; align-items: center; gap: 7px;
-  background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3);
+  background: rgba(250,204,21,0.1); border: 1px solid rgba(250,204,21,0.35);
   padding: 6px 14px; border-radius: 100px;
-  font-size: 12px; font-weight: 700; color: #10b981; letter-spacing: 1px;
+  font-size: 12px; font-weight: 700; color: #facc15; letter-spacing: 1px;
 }
 .live-dot {
-  width: 7px; height: 7px; background: #10b981; border-radius: 50%;
+  width: 7px; height: 7px; background: #facc15; border-radius: 50%;
   animation: blink 1.5s ease-in-out infinite;
 }
 @keyframes blink { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
@@ -88,30 +92,31 @@ body::before {
 .main-col { min-width: 0; }
 
 .section-label {
+  font-family: 'Oswald', sans-serif;
   font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 2px; color: #334155; margin-bottom: 14px;
+  letter-spacing: 2px; color: #3f6b4a; margin-bottom: 14px;
 }
 
 /* ── Leaderboard ── */
 .leaderboard {
-  background: #0f172a; border: 1px solid #1e293b;
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.12);
   border-radius: 20px; overflow: hidden; margin-bottom: 36px;
 }
 .lb-row {
   display: grid; grid-template-columns: 52px 1fr 72px 130px;
   align-items: center; padding: 16px 22px;
-  border-bottom: 1px solid #0f1929; gap: 12px; transition: background 0.15s;
+  border-bottom: 1px solid #07170d; gap: 12px; transition: background 0.15s;
 }
 .lb-row:last-child { border-bottom: none; }
-.lb-row:hover { background: #1e293b55; }
-.lb-row.first { background: rgba(16,185,129,0.06); }
+.lb-row:hover { background: #14331c55; }
+.lb-row.first { background: rgba(250,204,21,0.06); }
 .lb-rank { font-size: 22px; text-align: center; }
 .lb-player-name { font-size: 18px; font-weight: 800; }
-.lb-player-sub { font-size: 12px; color: #475569; margin-top: 2px; }
-.lb-score { font-size: 32px; font-weight: 900; text-align: right; line-height: 1; }
+.lb-player-sub { font-size: 12px; color: #5b7a64; margin-top: 2px; }
+.lb-score { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; text-align: right; line-height: 1; }
 .lb-best-col { text-align: right; }
-.lb-best-label { font-size: 10px; color: #334155; text-transform: uppercase; letter-spacing: 1px; }
-.lb-best-val { font-size: 15px; font-weight: 700; color: #475569; }
+.lb-best-label { font-size: 10px; color: #3f6b4a; text-transform: uppercase; letter-spacing: 1px; }
+.lb-best-val { font-size: 15px; font-weight: 700; color: #5b7a64; }
 .best-rank-pill {
   display: inline-block; margin-top: 4px;
   padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
@@ -120,19 +125,19 @@ body::before {
 /* ── Cards Grid ── */
 .cards-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
 
-.player-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 20px; overflow: hidden; }
+.player-card { background: #0a1f12; border: 1px solid rgba(250,204,21,0.12); border-radius: 20px; overflow: hidden; }
 .card-header {
   padding: 16px 20px; display: flex; justify-content: space-between; align-items: flex-start;
   border-bottom-width: 1px; border-bottom-style: solid;
 }
-.card-name { font-size: 15px; font-weight: 900; text-transform: uppercase; letter-spacing: 1.5px; }
+.card-name { font-family: 'Oswald', sans-serif; font-size: 16px; font-weight: 900; text-transform: uppercase; letter-spacing: 1.5px; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .meta-pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 100px; }
-.card-score { font-size: 44px; font-weight: 900; line-height: 1; text-align: right; }
+.card-score { font-family: 'Oswald', sans-serif; font-size: 44px; font-weight: 900; line-height: 1; text-align: right; }
 .card-best { font-size: 11px; font-weight: 600; text-align: right; opacity: 0.5; margin-top: 2px; }
 
 .progress-wrap { padding: 10px 20px 0; }
-.progress-bar { height: 3px; background: #1e293b; border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
+.progress-bar { height: 3px; background: #143420; border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
 .progress-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
 
 .team-list { padding: 0 20px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
@@ -140,30 +145,30 @@ body::before {
   display: flex; justify-content: space-between; align-items: center;
   padding: 5px 8px; border-radius: 7px; background: rgba(255,255,255,0.025);
 }
-.team-name { font-size: 12px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
+.team-name { font-size: 12px; color: #a8c2ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
 .team-flag { font-size: 14px; flex-shrink: 0; line-height: 1; }
 .team-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .team-pts { font-size: 12px; font-weight: 800; min-width: 14px; text-align: right; }
-.pts-none  { color: #1e293b; }
-.pts-zero  { color: #374151; }
-.pts-low   { color: #f59e0b; }
-.pts-high  { color: #10b981; }
+.pts-none  { color: #1e3a26; }
+.pts-zero  { color: #3f5a47; }
+.pts-low   { color: #facc15; }
+.pts-high  { color: #22c55e; }
 
-/* ── Game pips ── */
+/* ── Game pips (styled like ref cards: green win, yellow draw, red loss) ── */
 .game-pips { display: flex; gap: 3px; align-items: center; }
 .pip {
-  width: 16px; height: 16px; border-radius: 50%;
+  width: 14px; height: 17px; border-radius: 3px;
   font-size: 8px; font-weight: 900;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; cursor: default;
 }
-.pip-win   { background: #10b981; color: #fff; }
-.pip-draw  { background: #f59e0b; color: #000; }
+.pip-win   { background: #22c55e; color: #07170d; }
+.pip-draw  { background: #facc15; color: #07170d; }
 .pip-loss  { background: #ef4444; color: #fff; }
-.pip-live  { background: #22c55e; color: #fff; animation: blink 1s infinite; }
-.pip-empty { background: transparent; border: 1.5px dashed #1e3a5f; }
-.team-bonus { font-size: 10px; font-weight: 800; color: #f59e0b; margin-left: 2px; }
-.team-live { background: rgba(34,197,94,0.08) !important; border: 1px solid rgba(34,197,94,0.25) !important; }
+.pip-live  { background: #22c55e; color: #07170d; animation: blink 1s infinite; }
+.pip-empty { background: transparent; border: 1.5px dashed #1e3a26; border-radius: 3px; }
+.team-bonus { font-size: 10px; font-weight: 800; color: #facc15; margin-left: 2px; }
+.team-live { background: rgba(34,197,94,0.1) !important; border: 1px solid rgba(34,197,94,0.3) !important; }
 .live-pip {
   display: inline-block; width: 6px; height: 6px;
   background: #22c55e; border-radius: 50%; flex-shrink: 0;
@@ -177,39 +182,40 @@ body::before {
 }
 
 .schedule-panel {
-  background: #0f172a;
-  border: 1px solid #1e293b;
+  background: #0a1f12;
+  border: 1px solid rgba(250,204,21,0.12);
   border-radius: 20px;
   overflow: hidden;
 }
 
 .schedule-header {
   padding: 16px 18px 12px;
-  border-bottom: 1px solid #1e293b;
+  border-bottom: 1px solid rgba(250,204,21,0.12);
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 .schedule-title {
+  font-family: 'Oswald', sans-serif;
   font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 1.5px; color: #64748b;
+  letter-spacing: 1.5px; color: #5b7a64;
 }
 .schedule-badge {
   font-size: 10px; font-weight: 700; padding: 2px 7px;
-  border-radius: 100px; background: rgba(59,130,246,0.15);
-  color: #3b82f6; letter-spacing: 0.5px;
+  border-radius: 100px; background: rgba(250,204,21,0.15);
+  color: #facc15; letter-spacing: 0.5px;
 }
 
 .game-item {
   padding: 14px 18px;
-  border-bottom: 1px solid #0a1220;
+  border-bottom: 1px solid #061a0d;
   transition: background 0.15s;
 }
 .game-item:last-child { border-bottom: none; }
-.game-item:hover { background: #1e293b44; }
+.game-item:hover { background: #14331c44; }
 
 .game-time {
-  font-size: 11px; font-weight: 600; color: #475569;
+  font-size: 11px; font-weight: 600; color: #5b7a64;
   text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
   display: flex; align-items: center; gap: 6px;
 }
@@ -217,46 +223,46 @@ body::before {
   width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 }
 .dot-live { background: #22c55e; animation: blink 1s infinite; }
-.dot-soon { background: #f59e0b; }
-.dot-scheduled { background: #334155; }
+.dot-soon { background: #facc15; }
+.dot-scheduled { background: #2d4a36; }
 
 .game-teams { display: flex; flex-direction: column; gap: 5px; }
 .game-team {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 13px;
 }
-.game-team-name { font-weight: 600; color: #cbd5e1; }
-.game-team-name.owned { color: #10b981; font-weight: 800; }
+.game-team-name { font-weight: 600; color: #c3d9c7; }
+.game-team-name.owned { color: #22c55e; font-weight: 800; }
 .game-score {
-  font-size: 14px; font-weight: 800; color: #e2e8f0;
+  font-size: 14px; font-weight: 800; color: #e8f3ea;
   min-width: 20px; text-align: right;
 }
 .game-vs {
-  text-align: center; font-size: 10px; color: #334155;
+  text-align: center; font-size: 10px; color: #2d4a36;
   font-weight: 700; letter-spacing: 1px;
 }
 
-.schedule-loading { padding: 32px 18px; text-align: center; color: #334155; font-size: 13px; }
-.schedule-error { padding: 24px 18px; text-align: center; color: #475569; font-size: 12px; }
+.schedule-loading { padding: 32px 18px; text-align: center; color: #2d4a36; font-size: 13px; }
+.schedule-error { padding: 24px 18px; text-align: center; color: #5b7a64; font-size: 12px; }
 
 /* ── Monte Carlo Panel ── */
 .mc-panel {
-  background: #0f172a; border: 1px solid #1e293b;
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.12);
   border-radius: 20px; overflow: hidden; margin-top: 18px;
 }
-.mc-header { padding: 16px 18px 12px; border-bottom: 1px solid #1e293b; }
-.mc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; }
-.mc-sub { font-size: 10px; color: #334155; margin-top: 3px; }
+.mc-header { padding: 16px 18px 12px; border-bottom: 1px solid rgba(250,204,21,0.12); }
+.mc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #5b7a64; }
+.mc-sub { font-size: 10px; color: #2d4a36; margin-top: 3px; }
 .mc-body { padding: 16px 18px; }
 .mc-row { margin-bottom: 14px; }
 .mc-row:last-child { margin-bottom: 0; }
 .mc-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
-.mc-bar-bg { height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; }
+.mc-bar-bg { height: 8px; background: #143420; border-radius: 4px; overflow: hidden; }
 .mc-bar-fill { height: 100%; border-radius: 4px; transition: width 1s ease; }
 .mc-pct { font-size: 15px; font-weight: 900; }
 
 /* Footer */
-.footer { text-align: center; color: #1e293b; font-size: 12px; padding: 24px 0 40px; }
+.footer { text-align: center; color: #2d4a36; font-size: 12px; padding: 24px 0 40px; }
 
 /* Responsive */
 @media (max-width: 900px) {
@@ -277,7 +283,7 @@ body::before {
 
 <div class="header">
   <div>
-    <h1>⚽ World Cup 2026 Pick'em</h1>
+    <h1>⚽ World Cup 2026 Pick'em 🏆</h1>
     <div class="header-sub">4 players · live scores from ESPN · rosters from Apple Notes</div>
   </div>
   <div class="live-badge"><div class="live-dot"></div>LIVE</div>
@@ -304,6 +310,15 @@ body::before {
       </div>
     </div>
 
+    <div class="mc-panel">
+      <div class="mc-header">
+        <div class="mc-title">🎲 Win Probability</div>
+        <div class="mc-sub">Monte Carlo · 10,000 sims · weighted by team strength</div>
+      </div>
+      <div class="mc-body" id="mc-body">
+        <div class="schedule-loading">Calculating…</div>
+      </div>
+    </div>
   </div>
 
 </div><!-- end page-body -->
@@ -674,6 +689,7 @@ async function updateAll() {
     ownedTeams = new Set();
     data.players.forEach(p => p.teams.forEach(t => ownedTeams.add(t.name.toLowerCase())));
     renderCards(data.players);
+    renderMonteCarlo(data.sim_probs, data.players);
     document.getElementById('footer').textContent = `Scores from ESPN · Roster from Apple Notes · Updated: ${data.updated}`;
   } catch(e) {
     document.getElementById('footer').textContent = 'Error loading data — retrying…';
@@ -687,7 +703,7 @@ setInterval(updateAll, 30000);
 </html>"""
 
 
-import urllib.request
+import urllib.request, concurrent.futures
 from datetime import timedelta
 
 # ── Name normalization ────────────────────────────────────────────────────────
@@ -778,13 +794,25 @@ def fetch_espn_url(url):
         return json.load(r)
 
 def fetch_group_stage_games():
-    """Fetch all completed group-stage games from ESPN (June 11 – July 2)."""
-    games = []
+    """
+    Fetch ALL group-stage games from ESPN for the full window (June 11 – July 2),
+    including games that haven't been played yet (status == scheduled). This is
+    required so that teams which haven't played any games so far are still known
+    to the system (correct group membership + correct remaining fixture list),
+    instead of being invisible to scoring/simulation until their first kickoff.
+    Fetched concurrently across days to keep this fast.
+    """
+    dates = []
     d = datetime(2026, 6, 11)
-    end = min(datetime.now() + timedelta(days=1), datetime(2026, 7, 3))
+    end = datetime(2026, 7, 3)
     while d < end:
+        dates.append(d.strftime('%Y%m%d'))
+        d += timedelta(days=1)
+
+    def fetch_day(ds):
+        day_games = []
         try:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={d.strftime('%Y%m%d')}"
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
             data = fetch_espn_url(url)
             for event in data.get('events', []):
                 slug = event.get('season', {}).get('slug', '')
@@ -795,13 +823,14 @@ def fetch_group_stage_games():
                 is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
                                      'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
                                      'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
-                if not (is_done or is_live): continue
+                # Note: scheduled (not done, not live) games are kept too —
+                # they're needed to know full group membership & remaining fixtures.
                 cs = comp['competitors']
                 if len(cs) < 2: continue
                 t1, t2 = cs[0], cs[1]
                 s1 = int(t1.get('score') or 0)
                 s2 = int(t2.get('score') or 0)
-                games.append({
+                day_games.append({
                     'team1': norm(t1['team']['displayName']),
                     'team2': norm(t2['team']['displayName']),
                     'team1_display': t1['team']['displayName'],
@@ -812,7 +841,12 @@ def fetch_group_stage_games():
                 })
         except Exception:
             pass
-        d += timedelta(days=1)
+        return day_games
+
+    games = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        for day_games in ex.map(fetch_day, dates):
+            games.extend(day_games)
     return games
 
 def build_team_stats(games):
@@ -840,6 +874,9 @@ def build_team_stats(games):
         t1, t2 = g['team1'], g['team2']
         s1, s2 = g['score1'], g['score2']
         union(t1, t2)
+        # Always register both teams, even for scheduled (not yet played) games,
+        # so teams with 0 games played so far are still known to the system.
+        get(t1); get(t2)
         if g['done']:
             for team, score, opp_score, opp_disp in [
                 (t1, s1, s2, g['team2_display']),
@@ -890,6 +927,25 @@ def build_team_stats(games):
             s['group_pos'] = pos
             s['group_done'] = group_done
 
+    # ── Wild-card 3rd-place advancement (best 8 third-placed teams) ─────────
+    # The "+1 for 3rd place" bonus only applies if that team actually advances
+    # to the Round of 32 as one of the 8 best third-place finishers. This can
+    # only be determined for real once every group has finished (12 groups x
+    # 3 games each); until then no team gets credit for it.
+    all_groups_done = len(groups) > 0 and all(
+        all(s['gp'] == 3 for _, s in members) for members in groups.values()
+    )
+    third_placers = []
+    for members in groups.values():
+        for team, s in members:
+            if s.get('group_pos') == 3:
+                third_placers.append((team, s))
+                s['advances_wildcard'] = False
+    if all_groups_done:
+        third_placers.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        for team, s in third_placers[:8]:
+            s['advances_wildcard'] = True
+
     return stats
 
 # ── Scoring rules ──────────────────────────────────────────────────────────────
@@ -915,7 +971,7 @@ def calculate_scores(roster, team_stats):
                 pos = s.get('group_pos', 99)
                 if pos == 1: group_bonus = 4
                 elif pos == 2: group_bonus = 2
-                elif pos == 3: group_bonus = 1
+                elif pos == 3 and s.get('advances_wildcard'): group_bonus = 1
 
             team_total = match_pts + group_bonus
             total += team_total
@@ -955,6 +1011,45 @@ def calculate_scores(roster, team_stats):
 
 # ── Monte Carlo simulation ────────────────────────────────────────────────────
 
+# Approximate team strength ratings (0-100), based on general squad quality /
+# FIFA-ranking tiers heading into the 2026 tournament. Used to weight simulated
+# match outcomes instead of treating every game as a coin flip.
+TEAM_STRENGTH = {
+    'argentina': 95, 'france': 94, 'spain': 92, 'england': 90, 'brazil': 90,
+    'portugal': 89, 'netherlands': 87, 'germany': 86, 'belgium': 84,
+    'uruguay': 81, 'croatia': 80, 'morocco': 79, 'colombia': 78,
+    'switzerland': 76, 'senegal': 76, "cote d'ivoire": 74, 'mexico': 75,
+    'japan': 75, 'united states': 74, 'turkiye': 72, 'austria': 71,
+    'ecuador': 70, 'norway': 70, 'south korea': 70, 'canada': 68,
+    'algeria': 67, 'sweden': 67, 'egypt': 66, 'ghana': 65,
+    'czech republic': 65, 'tunisia': 64, 'iran': 64, 'scotland': 64,
+    'paraguay': 60, 'bosnia': 60, 'panama': 58, 'saudi arabia': 58,
+    'qatar': 56, 'south africa': 55, 'uzbekistan': 52, 'congo dr': 50,
+    'jordan': 50, 'new zealand': 50, 'cape verde': 48, 'iraq': 48,
+    'curacao': 45, 'haiti': 44,
+}
+
+def strength(team):
+    return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
+
+def match_probs(t1, t2):
+    """
+    Return (p_t1_win, p_draw, p_t2_win) for a group-stage match,
+    using an Elo-style logistic curve on the strength gap plus a flat draw rate.
+    """
+    diff = (strength(t1) - strength(t2)) * 20      # scale rating gap to elo-like units
+    p1_decisive = 1 / (1 + 10 ** (-diff / 400))
+    draw_rate = 0.24
+    p1 = p1_decisive * (1 - draw_rate)
+    p2 = (1 - p1_decisive) * (1 - draw_rate)
+    return p1, draw_rate, p2
+
+def knockout_win_prob(t1, t2):
+    """P(t1 beats t2) in a knockout match (no draws — eventually decided)."""
+    diff = (strength(t1) - strength(t2)) * 20
+    return 1 / (1 + 10 ** (-diff / 400))
+
+
 def get_remaining_games(done_games, team_stats):
     """Enumerate all group-stage games not yet played by round-robin within each group."""
     # Collect already-played pairs (normalized names)
@@ -982,8 +1077,8 @@ def get_remaining_games(done_games, team_stats):
 def run_monte_carlo(roster, team_stats, done_games, n=10000):
     """
     Simulate n full tournaments (remaining group games + knockout rounds).
-    Group games: P(W)=P(D)=P(L)=1/3.
-    Knockout: 50/50 per match, +4 pts per round won.
+    Group games: outcome weighted by team strength (Elo-style) + flat draw rate.
+    Knockout: weighted by team strength, no draws, +4 pts per round won.
     Top 2 per group + 8 best 3rd-place teams advance (32 teams total).
     Returns {player_name: win_probability_pct}.
     """
@@ -999,15 +1094,19 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
     player_teams = {player: [norm(t) for t in teams] for player, teams in roster.items()}
     win_counts = {p: 0.0 for p in roster}
 
+    # Precompute match probabilities once (strength ratings are static)
+    match_p = {(t1, t2): match_probs(t1, t2) for t1, t2 in remaining}
+
     for _ in range(n):
         pts = dict(base_pts)
 
-        # ── Simulate remaining group games ──────────────────────────────
+        # ── Simulate remaining group games (quality-weighted) ────────────
         for t1, t2 in remaining:
+            p1, pd, p2 = match_p[(t1, t2)]
             r = random.random()
-            if r < 1 / 3:
+            if r < p1:
                 pts[t1] = pts.get(t1, 0) + 3
-            elif r < 2 / 3:
+            elif r < p1 + pd:
                 pts[t1] = pts.get(t1, 0) + 1
                 pts[t2] = pts.get(t2, 0) + 1
             else:
@@ -1020,29 +1119,59 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
 
         for members in groups.values():
             sorted_m = sorted(members, key=lambda t: -pts.get(t, 0))
-            for i, team in enumerate(sorted_m):
-                group_bonus[team] = [4, 2, 1, 0][i] if i < 4 else 0
+            if len(sorted_m) > 0: group_bonus[sorted_m[0]] = 4
+            if len(sorted_m) > 1: group_bonus[sorted_m[1]] = 2
             advanced.extend(sorted_m[:2])           # top 2 advance directly
             if len(sorted_m) >= 3:
                 third_place.append((sorted_m[2], pts.get(sorted_m[2], 0)))
 
-        # Best 8 third-place teams also advance (WC 2026 format)
+        # Best 8 third-place teams also advance (WC 2026 format); only those
+        # 8 get the "+1 for 3rd place" bonus, per the rule "3rd, but you
+        # advance to rd of 32, => 1 point".
         third_place.sort(key=lambda x: -x[1])
-        advanced.extend(t for t, _ in third_place[:8])  # 24 + 8 = 32 teams
+        wildcards = third_place[:8]
+        for t, _ in wildcards:
+            group_bonus[t] = 1
+        advanced.extend(t for t, _ in wildcards)  # 24 + 8 = 32 teams
 
-        # ── Simulate knockout rounds (50/50 per match) ──────────────────
+        # ── Simulate knockout rounds (quality-weighted) ──────────────────
+        # Generic rule: +4 pts per win / round advanced.
+        # Exceptions: 3rd-place (bronze) match winner gets +2 instead of +4;
+        # Final loser (runner-up) gets +2 bonus; Final winner (champion) gets
+        # an extra +4 bonus on top of their round-win points.
         knockout_bonus = {team: 0 for team in advanced}
         random.shuffle(advanced)
         current_round = list(advanced)
+        semifinal_losers = []
         while len(current_round) > 1:
             next_round = []
+            is_semifinal = len(current_round) == 4
+            is_final = len(current_round) == 2
             for i in range(0, len(current_round) - 1, 2):
-                winner = current_round[i] if random.random() < 0.5 else current_round[i + 1]
-                knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+                a, b = current_round[i], current_round[i + 1]
+                p_a = knockout_win_prob(a, b)
+                winner = a if random.random() < p_a else b
+                loser = b if winner is a else a
+                if is_semifinal:
+                    semifinal_losers.append(loser)
+                if is_final:
+                    # Final winner: +4 round win + +4 champion bonus
+                    knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4 + 4
+                    # Runner-up: +2 bonus (no points for the round "win" since they lost)
+                    knockout_bonus[loser] = knockout_bonus.get(loser, 0) + 2
+                else:
+                    knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
                 next_round.append(winner)
             if len(current_round) % 2 == 1:          # bye if odd (shouldn't happen at 32)
                 next_round.append(current_round[-1])
             current_round = next_round
+
+        # ── 3rd-place (bronze) match between the two semifinal losers ───
+        if len(semifinal_losers) == 2:
+            a, b = semifinal_losers
+            p_a = knockout_win_prob(a, b)
+            bronze_winner = a if random.random() < p_a else b
+            knockout_bonus[bronze_winner] = knockout_bonus.get(bronze_winner, 0) + 2
 
         # ── Player final scores ─────────────────────────────────────────
         scores = {
@@ -1068,8 +1197,11 @@ def get_data():
     games = fetch_group_stage_games()
     team_stats = build_team_stats(games)
     players = calculate_scores(roster, team_stats)
+    done_games = [g for g in games if g['done']]
+    sim_probs = run_monte_carlo(roster, team_stats, done_games, n=10000)
     return {
         'players': players,
+        'sim_probs': sim_probs,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
     }
 
