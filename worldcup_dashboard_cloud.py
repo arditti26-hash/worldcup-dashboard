@@ -1,0 +1,1108 @@
+#!/usr/bin/env python3
+"""World Cup 2026 Pick'em Live Dashboard — reads from Apple Notes via AppleScript"""
+
+import subprocess, json, re, random, os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
+
+PORT = int(os.environ.get('PORT', 8766))
+
+COLORS = {
+    'CARSON': {'primary': '#10b981', 'bg': 'rgba(16,185,129,0.15)'},
+    'KEITH':  {'primary': '#3b82f6', 'bg': 'rgba(59,130,246,0.15)'},
+    'LUKE':   {'primary': '#f59e0b', 'bg': 'rgba(245,158,11,0.15)'},
+    'WILL':   {'primary': '#8b5cf6', 'bg': 'rgba(139,92,246,0.15)'},
+}
+
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Cup 2026 Pick'em</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #060d1a;
+  color: #e2e8f0;
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent, transparent 40px, rgba(255,255,255,0.015) 40px, rgba(255,255,255,0.015) 41px),
+    radial-gradient(ellipse at 20% 50%, rgba(16,185,129,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 30%, rgba(59,130,246,0.06) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wrap { position: relative; z-index: 1; }
+
+/* ── Header ── */
+.header {
+  background: rgba(15,23,42,0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid #1e293b;
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 10;
+}
+.header h1 {
+  font-size: 26px; font-weight: 900;
+  background: linear-gradient(135deg, #10b981 0%, #3b82f6 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  letter-spacing: -0.5px;
+}
+.header-sub { color: #475569; font-size: 13px; margin-top: 3px; }
+.live-badge {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3);
+  padding: 6px 14px; border-radius: 100px;
+  font-size: 12px; font-weight: 700; color: #10b981; letter-spacing: 1px;
+}
+.live-dot {
+  width: 7px; height: 7px; background: #10b981; border-radius: 50%;
+  animation: blink 1.5s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+
+/* ── Main layout: left content + right sidebar ── */
+.page-body {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 28px;
+  align-items: start;
+}
+
+.main-col { min-width: 0; }
+
+.section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 2px; color: #334155; margin-bottom: 14px;
+}
+
+/* ── Leaderboard ── */
+.leaderboard {
+  background: #0f172a; border: 1px solid #1e293b;
+  border-radius: 20px; overflow: hidden; margin-bottom: 36px;
+}
+.lb-row {
+  display: grid; grid-template-columns: 52px 1fr 72px 130px;
+  align-items: center; padding: 16px 22px;
+  border-bottom: 1px solid #0f1929; gap: 12px; transition: background 0.15s;
+}
+.lb-row:last-child { border-bottom: none; }
+.lb-row:hover { background: #1e293b55; }
+.lb-row.first { background: rgba(16,185,129,0.06); }
+.lb-rank { font-size: 22px; text-align: center; }
+.lb-player-name { font-size: 18px; font-weight: 800; }
+.lb-player-sub { font-size: 12px; color: #475569; margin-top: 2px; }
+.lb-score { font-size: 32px; font-weight: 900; text-align: right; line-height: 1; }
+.lb-best-col { text-align: right; }
+.lb-best-label { font-size: 10px; color: #334155; text-transform: uppercase; letter-spacing: 1px; }
+.lb-best-val { font-size: 15px; font-weight: 700; color: #475569; }
+.best-rank-pill {
+  display: inline-block; margin-top: 4px;
+  padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+}
+
+/* ── Cards Grid ── */
+.cards-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+
+.player-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 20px; overflow: hidden; }
+.card-header {
+  padding: 16px 20px; display: flex; justify-content: space-between; align-items: flex-start;
+  border-bottom-width: 1px; border-bottom-style: solid;
+}
+.card-name { font-size: 15px; font-weight: 900; text-transform: uppercase; letter-spacing: 1.5px; }
+.card-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.meta-pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 100px; }
+.card-score { font-size: 44px; font-weight: 900; line-height: 1; text-align: right; }
+.card-best { font-size: 11px; font-weight: 600; text-align: right; opacity: 0.5; margin-top: 2px; }
+
+.progress-wrap { padding: 10px 20px 0; }
+.progress-bar { height: 3px; background: #1e293b; border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
+.progress-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+
+.team-list { padding: 0 20px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.team-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; border-radius: 7px; background: rgba(255,255,255,0.025);
+}
+.team-name { font-size: 12px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
+.team-flag { font-size: 14px; flex-shrink: 0; line-height: 1; }
+.team-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.team-pts { font-size: 12px; font-weight: 800; min-width: 14px; text-align: right; }
+.pts-none  { color: #1e293b; }
+.pts-zero  { color: #374151; }
+.pts-low   { color: #f59e0b; }
+.pts-high  { color: #10b981; }
+
+/* ── Game pips ── */
+.game-pips { display: flex; gap: 3px; align-items: center; }
+.pip {
+  width: 16px; height: 16px; border-radius: 50%;
+  font-size: 8px; font-weight: 900;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; cursor: default;
+}
+.pip-win   { background: #10b981; color: #fff; }
+.pip-draw  { background: #f59e0b; color: #000; }
+.pip-loss  { background: #ef4444; color: #fff; }
+.pip-live  { background: #22c55e; color: #fff; animation: blink 1s infinite; }
+.pip-empty { background: transparent; border: 1.5px dashed #1e3a5f; }
+.team-bonus { font-size: 10px; font-weight: 800; color: #f59e0b; margin-left: 2px; }
+.team-live { background: rgba(34,197,94,0.08) !important; border: 1px solid rgba(34,197,94,0.25) !important; }
+.live-pip {
+  display: inline-block; width: 6px; height: 6px;
+  background: #22c55e; border-radius: 50%; flex-shrink: 0;
+  animation: blink 1s ease-in-out infinite;
+}
+
+/* ── Schedule Sidebar ── */
+.sidebar {
+  position: sticky;
+  top: 88px;
+}
+
+.schedule-panel {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.schedule-header {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.schedule-title {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: #64748b;
+}
+.schedule-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px;
+  border-radius: 100px; background: rgba(59,130,246,0.15);
+  color: #3b82f6; letter-spacing: 0.5px;
+}
+
+.game-item {
+  padding: 14px 18px;
+  border-bottom: 1px solid #0a1220;
+  transition: background 0.15s;
+}
+.game-item:last-child { border-bottom: none; }
+.game-item:hover { background: #1e293b44; }
+
+.game-time {
+  font-size: 11px; font-weight: 600; color: #475569;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.game-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.dot-live { background: #22c55e; animation: blink 1s infinite; }
+.dot-soon { background: #f59e0b; }
+.dot-scheduled { background: #334155; }
+
+.game-teams { display: flex; flex-direction: column; gap: 5px; }
+.game-team {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px;
+}
+.game-team-name { font-weight: 600; color: #cbd5e1; }
+.game-team-name.owned { color: #10b981; font-weight: 800; }
+.game-score {
+  font-size: 14px; font-weight: 800; color: #e2e8f0;
+  min-width: 20px; text-align: right;
+}
+.game-vs {
+  text-align: center; font-size: 10px; color: #334155;
+  font-weight: 700; letter-spacing: 1px;
+}
+
+.schedule-loading { padding: 32px 18px; text-align: center; color: #334155; font-size: 13px; }
+.schedule-error { padding: 24px 18px; text-align: center; color: #475569; font-size: 12px; }
+
+/* ── Monte Carlo Panel ── */
+.mc-panel {
+  background: #0f172a; border: 1px solid #1e293b;
+  border-radius: 20px; overflow: hidden; margin-top: 18px;
+}
+.mc-header { padding: 16px 18px 12px; border-bottom: 1px solid #1e293b; }
+.mc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; }
+.mc-sub { font-size: 10px; color: #334155; margin-top: 3px; }
+.mc-body { padding: 16px 18px; }
+.mc-row { margin-bottom: 14px; }
+.mc-row:last-child { margin-bottom: 0; }
+.mc-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.mc-bar-bg { height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; }
+.mc-bar-fill { height: 100%; border-radius: 4px; transition: width 1s ease; }
+.mc-pct { font-size: 15px; font-weight: 900; }
+
+/* Footer */
+.footer { text-align: center; color: #1e293b; font-size: 12px; padding: 24px 0 40px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .page-body { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .schedule-panel { margin-bottom: 24px; }
+}
+@media (max-width: 620px) {
+  .cards-grid { grid-template-columns: 1fr; }
+  .header { flex-direction: column; gap: 12px; align-items: flex-start; }
+  .lb-row { grid-template-columns: 40px 1fr 56px; }
+  .lb-best-col { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="header">
+  <div>
+    <h1>⚽ World Cup 2026 Pick'em</h1>
+    <div class="header-sub">4 players · live scores from ESPN · rosters from Apple Notes</div>
+  </div>
+  <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+</div>
+
+<div class="page-body">
+
+  <!-- Left: main content -->
+  <div class="main-col">
+    <div class="cards-grid" id="cards"></div>
+    <div class="footer" id="footer"></div>
+  </div>
+
+  <!-- Right: schedule sidebar -->
+  <div class="sidebar">
+    <div class="section-label">Next Games</div>
+    <div class="schedule-panel">
+      <div class="schedule-header">
+        <span class="schedule-title">FIFA World Cup 2026</span>
+        <span class="schedule-badge" id="schedule-badge">ESPN</span>
+      </div>
+      <div id="schedule-body">
+        <div class="schedule-loading">Loading schedule…</div>
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- end page-body -->
+
+</div><!-- end wrap -->
+
+<script>
+const C = {
+  CARSON: {primary:'#10b981', bg:'rgba(16,185,129,0.15)', border:'rgba(16,185,129,0.2)'},
+  KEITH:  {primary:'#3b82f6', bg:'rgba(59,130,246,0.15)',  border:'rgba(59,130,246,0.2)'},
+  LUKE:   {primary:'#f59e0b', bg:'rgba(245,158,11,0.15)',  border:'rgba(245,158,11,0.2)'},
+  WILL:   {primary:'#8b5cf6', bg:'rgba(139,92,246,0.15)',  border:'rgba(139,92,246,0.2)'},
+};
+const RANK_EMOJI = ['🥇','🥈','🥉','4️⃣'];
+
+const FLAGS = {
+  'argentina':'🇦🇷','australia':'🇦🇺','austria':'🇦🇹','algeria':'🇩🇿',
+  'belgium':'🇧🇪','bosnia':'🇧🇦','brazil':'🇧🇷',
+  'canada':'🇨🇦','cape verde':'🇨🇻','colombia':'🇨🇴','congo dr':'🇨🇩',
+  'croatia':'🇭🇷','czech republic':'🇨🇿','curaçao':'🇨🇼',
+  "cote d'ivoire":"🇨🇮","côte d'ivoire":"🇨🇮",
+  'ecuador':'🇪🇨','egypt':'🇪🇬','england':'🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+  'france':'🇫🇷','germany':'🇩🇪','ghana':'🇬🇭',
+  'haiti':'🇭🇹','iran':'🇮🇷','iraq':'🇮🇶',
+  'japan':'🇯🇵','jordan':'🇯🇴',
+  'mexico':'🇲🇽','morocco':'🇲🇦',
+  'netherlands':'🇳🇱','new zealand':'🇳🇿','norway':'🇳🇴',
+  'panama':'🇵🇦','paraguay':'🇵🇾','portugal':'🇵🇹',
+  'qatar':'🇶🇦',
+  'saudi arabia':'🇸🇦','scotland':'🏴󠁧󠁢󠁳󠁣󠁴󠁿','senegal':'🇸🇳',
+  'south africa':'🇿🇦','south korea':'🇰🇷','spain':'🇪🇸','sweden':'🇸🇪',
+  'switzerland':'🇨🇭',
+  'tunisia':'🇹🇳','türkiye':'🇹🇷','turkiye':'🇹🇷',
+  'united states':'🇺🇸','uruguay':'🇺🇾','uzbekistan':'🇺🇿',
+};
+
+function flag(name) {
+  return FLAGS[name.toLowerCase()] || '🏳️';
+}
+
+// All teams owned by any player (for highlighting in schedule)
+let ownedTeams = new Set();
+
+function ptsClass(pts) {
+  if (pts === null || pts === undefined) return 'pts-none';
+  if (pts === 0) return 'pts-zero';
+  if (pts >= 3) return 'pts-high';
+  return 'pts-low';
+}
+
+function gamesPlayedForPlayer(player) {
+  return player.teams.reduce((sum, t) => sum + (t.gp || 0), 0);
+}
+
+function renderLeaderboard(players) {
+  const totalPerPlayer = players[0]?.teams.length * 3 || 36; // 12 teams × 3 group games
+  const html = players.map((p, i) => {
+    const c = C[p.name] || {primary:'#fff'};
+    const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
+    const bestRankText = bestRank === 1 ? 'Can win 🏆' : `Best: #${bestRank}`;
+    const played = gamesPlayedForPlayer(p);
+    const remaining = totalPerPlayer - played;
+    return `
+    <div class="lb-row ${i===0?'first':''}">
+      <div class="lb-rank">${RANK_EMOJI[i] || i+1}</div>
+      <div class="lb-player">
+        <div class="lb-player-name" style="color:${c.primary}">${p.name}</div>
+        <div class="lb-player-sub">
+          <span style="color:${c.primary};font-weight:700">${played}</span>/<span>${totalPerPlayer}</span> games played
+          · <span style="color:#475569">${remaining} left</span>
+        </div>
+      </div>
+      <div class="lb-score" style="color:${c.primary}">${p.total}</div>
+      <div class="lb-best-col">
+        <div class="lb-best-label">Best possible</div>
+        <div class="lb-best-val">${p.best_possible}</div>
+        <span class="best-rank-pill" style="background:${c.bg};color:${c.primary}">${bestRankText}</span>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('leaderboard').innerHTML = html;
+}
+
+/* ── Team game history (group stage pips) ── */
+let teamGameData = {}; // normalized name -> [{result,pts,score,oppScore,oppName,completed,live}]
+
+// Normalize team names to match between ESPN and the Apple Note
+const NAME_OVERRIDES = {
+  'usa': 'united states',
+  'ivory coast': "cote d'ivoire",
+  "cote d'ivoire": "cote d'ivoire",
+  'bosnia and herzegovina': 'bosnia',
+  'bosnia-herzegovina': 'bosnia',
+  'korea republic': 'south korea',
+  'dr congo': 'congo dr',
+  'democratic republic of congo': 'congo dr',
+  'republic of congo': 'congo dr',
+  'turkey': 'turkiye',
+  'cape verde islands': 'cape verde',
+};
+
+function normalizeName(name) {
+  if (!name) return '';
+  const s = name.toLowerCase()
+    .replace(/[éèêë]/g, 'e').replace(/[àâä]/g, 'a')
+    .replace(/[ùûü]/g, 'u').replace(/[ôö]/g, 'o')
+    .replace(/[^a-z0-9\s']/g, '').trim();
+  return NAME_OVERRIDES[s] || s;
+}
+
+async function fetchTeamGameHistory() {
+  // Group stage runs June 11 – July 2, 2026; fetch from start to today
+  const start = new Date('2026-06-11');
+  const today = new Date();
+  const dates = [];
+  for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+    dates.push(d.toISOString().slice(0, 10).replace(/-/g, ''));
+  }
+
+  // Fetch all past days in parallel
+  const allEvents = (await Promise.all(dates.map(async ds => {
+    try {
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${ds}`);
+      const data = await r.json();
+      return data.events || [];
+    } catch(e) { return []; }
+  }))).flat();
+
+  const map = {};
+  for (const event of allEvents) {
+    const comp = event.competitions?.[0];
+    if (!comp) continue;
+    const statusName = comp.status?.type?.name;
+    const isCompleted = statusName === 'STATUS_FINAL' || statusName === 'STATUS_FULL_TIME' || statusName === 'STATUS_FT';
+    const LIVE_S = ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY']; const isLive = LIVE_S.includes(statusName);
+    const competitors = comp.competitors || [];
+    if (competitors.length < 2) continue;
+
+    for (let i = 0; i < 2; i++) {
+      const me = competitors[i];
+      const opp = competitors[1 - i];
+      const key = normalizeName(me.team?.displayName || '');
+      if (!key) continue;
+      if (!map[key]) map[key] = [];
+
+      const myScore = parseInt(me.score);
+      const oppScore = parseInt(opp.score);
+      let result = null, pts = null;
+      if (isCompleted && !isNaN(myScore) && !isNaN(oppScore)) {
+        if (myScore > oppScore)      { result = 'W'; pts = 3; }
+        else if (myScore === oppScore){ result = 'D'; pts = 1; }
+        else                          { result = 'L'; pts = 0; }
+      }
+
+      map[key].push({ result, pts, score: myScore, oppScore, oppName: opp.team?.displayName, completed: isCompleted, live: isLive, date: event.date });
+    }
+  }
+  teamGameData = map;
+}
+
+function buildPips(teamGames) {
+  // teamGames is the array from the server: [{result,pts,score,opp_score,opp_name,live}]
+  const games = teamGames || [];
+  const TOTAL = 3;
+  const pips = [];
+  for (let i = 0; i < TOTAL; i++) {
+    const g = games[i];
+    if (!g) {
+      pips.push(`<span class="pip pip-empty" title="Game ${i+1}: not played yet"></span>`);
+    } else if (g.live) {
+      pips.push(`<span class="pip pip-live" title="LIVE vs ${g.opp_name}">●</span>`);
+    } else {
+      const cls = g.result === 'W' ? 'pip-win' : g.result === 'D' ? 'pip-draw' : 'pip-loss';
+      const tip = `${g.result} ${g.score}–${g.opp_score} vs ${g.opp_name} (${g.pts}pt)`;
+      pips.push(`<span class="pip ${cls}" title="${tip}">${g.pts}</span>`);
+    }
+  }
+  return `<div class="game-pips">${pips.join('')}</div>`;
+}
+
+function renderCards(players) {
+  const html = players.map(p => {
+    const c = C[p.name] || {primary:'#fff', bg:'rgba(255,255,255,0.1)', border:'rgba(255,255,255,0.2)'};
+    const pct = p.best_possible > 0 ? Math.round((p.total / p.best_possible) * 100) : 0;
+    const rank = players.findIndex(x => x.name === p.name) + 1;
+    const played = gamesPlayedForPlayer(p);
+    const totalGames = p.teams.length * 3;
+    const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
+    const bestRankText = bestRank === 1 ? '🏆 Can win' : `Best: #${bestRank}`;
+
+    const teamsHtml = p.teams.map(t => {
+      const pts = t.match_pts ?? t.pts ?? null;
+      const display = pts !== null ? pts : '—';
+      const bonus = t.group_bonus > 0 ? `<span class="team-bonus" title="Group ${t.group_position === 1 ? 'winner' : t.group_position === 2 ? '2nd' : '3rd'} bonus">+${t.group_bonus}</span>` : '';
+      const isLive = (t.games || []).some(g => g.live);
+      const liveGame = isLive ? t.games.find(g => g.live) : null;
+      const liveTip = liveGame ? `LIVE vs ${liveGame.opp_name}` : '';
+      return `<div class="team-item ${isLive ? 'team-live' : ''}">
+        <span class="team-name">
+          <span class="team-flag">${flag(t.name)}</span>
+          ${t.name}
+          ${isLive ? `<span class="live-pip" title="${liveTip}"></span>` : ''}
+        </span>
+        <div class="team-right">
+          ${buildPips(t.games)}
+          <span class="team-pts ${ptsClass(pts)}">${display}</span>
+          ${bonus}
+        </div>
+      </div>`;
+    }).join('');
+    return `
+    <div class="player-card">
+      <div class="card-header" style="background:${c.bg};border-bottom-color:${c.border}">
+        <div>
+          <div class="card-name" style="color:${c.primary}">${RANK_EMOJI[rank-1]} ${p.name}</div>
+          <div class="card-meta">
+            <span class="meta-pill" style="background:${c.bg};color:${c.primary}">${played}/${totalGames} games played</span>
+            <span class="meta-pill" style="background:rgba(255,255,255,0.05);color:#64748b">${bestRankText}</span>
+          </div>
+        </div>
+        <div>
+          <div class="card-score" style="color:${c.primary}">${p.total}</div>
+          <div class="card-best" style="color:${c.primary}">best: ${p.best_possible}</div>
+        </div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${pct}%;background:${c.primary}"></div>
+        </div>
+      </div>
+      <div class="team-list">${teamsHtml}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('cards').innerHTML = html;
+}
+
+/* ── Schedule ── */
+function formatGameTime(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+  });
+}
+
+function statusDotClass(statusType) {
+  if (['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(statusType)) return 'dot-live';
+  if (statusType === 'STATUS_SCHEDULED') {
+    const soon = false; // could check if within 1hr
+    return 'dot-scheduled';
+  }
+  return 'dot-scheduled';
+}
+
+async function fetchScheduleDates(dateStrings) {
+  const all = [];
+  for (const ds of dateStrings) {
+    try {
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${ds}`);
+      const data = await r.json();
+      all.push(...(data.events || []));
+    } catch(e) {}
+  }
+  return all;
+}
+
+function getNext4Games(events) {
+  const now = Date.now();
+  // Collect live + upcoming, sort by date
+  const relevant = events
+    .map(e => {
+      const comp = e.competitions?.[0] || {};
+      const statusType = comp.status?.type?.name || '';
+      const date = new Date(e.date).getTime();
+      return { e, comp, statusType, date };
+    })
+    .filter(x => !['STATUS_FINAL','STATUS_FULL_TIME','STATUS_FT'].includes(x.statusType) || x.date > now - 3*60*60*1000)
+    .sort((a, b) => a.date - b.date);
+
+  // Prefer live games first, then upcoming
+  const live = relevant.filter(x => ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(x.statusType));
+  const upcoming = relevant.filter(x => !['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(x.statusType));
+  return [...live, ...upcoming].slice(0, 4);
+}
+
+function renderSchedule(games) {
+  if (!games.length) {
+    document.getElementById('schedule-body').innerHTML = '<div class="schedule-error">No upcoming games found</div>';
+    return;
+  }
+  const html = games.map(({e, comp, statusType, date}) => {
+    const competitors = comp.competitors || [];
+    const isLive = ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(statusType);
+    const dotClass = isLive ? 'dot-live' : 'dot-scheduled';
+    const timeLabel = isLive
+      ? `LIVE · ${comp.status?.displayClock || ''} ${comp.status?.period ? `· ${comp.status.period}'` : ''}`
+      : formatGameTime(e.date);
+
+    const teamsHtml = competitors.map((c, idx) => {
+      const name = c.team?.displayName || c.team?.name || '?';
+      const score = c.score;
+      const isOwned = ownedTeams.has(name.toLowerCase());
+      return `
+        ${idx === 1 ? '<div class="game-vs">vs</div>' : ''}
+        <div class="game-team">
+          <span class="game-team-name ${isOwned ? 'owned' : ''}">${name}${isOwned ? ' ●' : ''}</span>
+          ${isLive || statusType === 'STATUS_FINAL' ? `<span class="game-score">${score ?? '—'}</span>` : ''}
+        </div>`;
+    }).join('');
+
+    return `
+    <div class="game-item">
+      <div class="game-time">
+        <span class="game-status-dot ${dotClass}"></span>
+        ${timeLabel}
+      </div>
+      <div class="game-teams">${teamsHtml}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('schedule-body').innerHTML = html;
+}
+
+async function updateSchedule() {
+  try {
+    // Fetch today + next 3 days to ensure we get 4 games
+    const now = new Date();
+    const dates = [];
+    for (let i = 0; i < 4; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      dates.push(d.toISOString().slice(0,10).replace(/-/g,''));
+    }
+    const events = await fetchScheduleDates(dates);
+    const next4 = getNext4Games(events);
+    renderSchedule(next4);
+  } catch(e) {
+    document.getElementById('schedule-body').innerHTML = '<div class="schedule-error">Could not load schedule</div>';
+  }
+}
+
+function renderMonteCarlo(simProbs, players) {
+  const el = document.getElementById('mc-body');
+  if (!simProbs || !players) { el.innerHTML = '<div class="schedule-error">Not available</div>'; return; }
+  const sorted = [...players]
+    .map(p => ({ name: p.name, prob: simProbs[p.name] ?? 0 }))
+    .sort((a, b) => b.prob - a.prob);
+  el.innerHTML = sorted.map(({ name, prob }) => {
+    const c = C[name] || { primary: '#fff' };
+    return `<div class="mc-row">
+      <div class="mc-label">
+        <span style="color:${c.primary};font-weight:800">${name}</span>
+        <span class="mc-pct" style="color:${c.primary}">${prob.toFixed(1)}%</span>
+      </div>
+      <div class="mc-bar-bg">
+        <div class="mc-bar-fill" style="width:${Math.min(prob,100)}%;background:${c.primary}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function updateAll() {
+  try {
+    const [, data] = await Promise.all([
+      updateSchedule(),
+      fetch('/api/data').then(r => r.json()),
+    ]);
+    ownedTeams = new Set();
+    data.players.forEach(p => p.teams.forEach(t => ownedTeams.add(t.name.toLowerCase())));
+    renderCards(data.players);
+    document.getElementById('footer').textContent = `Scores from ESPN · Roster from Apple Notes · Updated: ${data.updated}`;
+  } catch(e) {
+    document.getElementById('footer').textContent = 'Error loading data — retrying…';
+  }
+}
+
+updateAll();
+setInterval(updateAll, 30000);
+</script>
+</body>
+</html>"""
+
+
+import urllib.request
+from datetime import timedelta
+
+# ── Name normalization ────────────────────────────────────────────────────────
+
+ESPN_NAME_MAP = {
+    'czechia': 'czech republic',
+    'bosnia-herzegovina': 'bosnia',
+    'bosnia and herzegovina': 'bosnia',
+    'ivory coast': "cote d'ivoire",
+    'dr congo': 'congo dr',
+    'democratic republic of congo': 'congo dr',
+    'korea republic': 'south korea',
+    'cape verde islands': 'cape verde',
+    'turkey': 'turkiye',
+    'usa': 'united states',
+}
+
+def norm(name):
+    """Normalize a team name for comparison."""
+    if not name: return ''
+    s = name.lower()
+    for a, b in [('é','e'),('è','e'),('ê','e'),('ë','e'),('à','a'),('â','a'),
+                 ('ä','a'),('ù','u'),('û','u'),('ü','u'),('ô','o'),('ö','o'),('ç','c')]:
+        s = s.replace(a, b)
+    s = re.sub(r"[^\w\s']", '', s).strip()
+    return ESPN_NAME_MAP.get(s, s)
+
+# ── Roster (fixed — cloud deployment has no access to Apple Notes) ────────────
+# Source of truth: Apple Note "World Cup" as of 2026-06-16.
+# If rosters change, update this dict and redeploy.
+
+FIXED_ROSTER = {
+    'CARSON': ['Brazil', 'Portugal', 'United States', 'Switzerland', 'Sweden', 'Ecuador',
+               'Scotland', 'Egypt', 'New Zealand', 'Panama', 'Congo DR', 'Cape Verde'],
+    'KEITH': ['Spain', 'Netherlands', 'Belgium', 'Croatia', 'Morocco', 'South Korea',
+              'Australia', 'Paraguay', 'Tunisia', 'Qatar', 'Jordan', 'South Africa'],
+    'WILL': ['Germany', 'England', 'Japan', 'Uruguay', 'Mexico', 'Senegal',
+             'Algeria', 'Bosnia', 'Iran', 'Ghana', 'Saudi Arabia', 'Curaçao'],
+    'LUKE': ['France', 'Argentina', 'Norway', 'Colombia', 'Türkiye', "Côte d'Ivoire",
+             'Austria', 'Canada', 'Czech Republic', 'Uzbekistan', 'Haiti', 'Iraq'],
+}
+
+def read_note():
+    return ''  # not available in cloud deployment
+
+def strip_html(html):
+    text = re.sub(r'<br\s*/?>', '\n', html, flags=re.I)
+    text = re.sub(r'</div>', '\n', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    return text.replace('&gt;','>').replace('&lt;','<').replace('&amp;','&').replace('&nbsp;',' ')
+
+RULES_KEYWORDS = [
+    'you get a point', '=>', 'win group', 'bonus point', 'bronze winner',
+    'runner up', 'winner =', 'credits ray', 'bernini', 'each win',
+    'advancing to the next', 'group stage', '4 points', '2 points', '1 point',
+    'and the points build',
+]
+
+def parse_note_roster(html):
+    """Extract player → [team name, ...] from the Note. Ignores scores."""
+    text = strip_html(html)
+    players = {}
+    current = None
+    for raw in text.split('\n'):
+        line = raw.strip()
+        if not line: continue
+        if '2022 results' in line.lower(): break
+        m = re.match(r'^(CARSON|KEITH|LUKE|WILL)\b', line, re.I)
+        if m:
+            current = m.group(1).upper()
+            players[current] = []
+            continue
+        if current:
+            if any(kw in line.lower() for kw in RULES_KEYWORDS): continue
+            clean = re.sub(r"[^\w\s'\-\.]", '', line, flags=re.UNICODE).strip()
+            if not clean or len(clean) < 2: continue
+            # Strip trailing score if present (e.g. "Brazil - 3")
+            team_name = re.sub(r'\s*-\s*\d+\s*$', '', clean).strip(' -')
+            if team_name and len(team_name) > 1:
+                players[current].append(team_name)
+    return players
+
+# ── ESPN game data ─────────────────────────────────────────────────────────────
+
+def fetch_espn_url(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.load(r)
+
+def fetch_group_stage_games():
+    """Fetch all completed group-stage games from ESPN (June 11 – July 2)."""
+    games = []
+    d = datetime(2026, 6, 11)
+    end = min(datetime.now() + timedelta(days=1), datetime(2026, 7, 3))
+    while d < end:
+        try:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={d.strftime('%Y%m%d')}"
+            data = fetch_espn_url(url)
+            for event in data.get('events', []):
+                slug = event.get('season', {}).get('slug', '')
+                if 'group' not in slug: continue  # skip knockout rounds
+                comp = event['competitions'][0]
+                status = comp['status']['type']['name']
+                is_done = status in ('STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT')
+                is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
+                                     'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
+                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
+                if not (is_done or is_live): continue
+                cs = comp['competitors']
+                if len(cs) < 2: continue
+                t1, t2 = cs[0], cs[1]
+                s1 = int(t1.get('score') or 0)
+                s2 = int(t2.get('score') or 0)
+                games.append({
+                    'team1': norm(t1['team']['displayName']),
+                    'team2': norm(t2['team']['displayName']),
+                    'team1_display': t1['team']['displayName'],
+                    'team2_display': t2['team']['displayName'],
+                    'score1': s1, 'score2': s2,
+                    'done': is_done, 'live': is_live,
+                    'date': event['date'],
+                })
+        except Exception:
+            pass
+        d += timedelta(days=1)
+    return games
+
+def build_team_stats(games):
+    """
+    Returns:
+      team_stats: {norm_name: {pts, gp, w, d, l, gf, ga, gd, group_id, group_pos, group_done, games[]}}
+    Groups determined via union-find on opponents.
+    """
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        if parent[x] != x: parent[x] = find(parent[x])
+        return parent[x]
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py: parent[px] = py
+
+    stats = {}
+    def get(t):
+        if t not in stats:
+            stats[t] = {'pts':0,'gp':0,'w':0,'d':0,'l':0,'gf':0,'ga':0,'gd':0,'games':[]}
+        return stats[t]
+
+    for g in games:
+        t1, t2 = g['team1'], g['team2']
+        s1, s2 = g['score1'], g['score2']
+        union(t1, t2)
+        if g['done']:
+            for team, score, opp_score, opp_disp in [
+                (t1, s1, s2, g['team2_display']),
+                (t2, s2, s1, g['team1_display'])
+            ]:
+                st = get(team)
+                st['gp'] += 1
+                st['gf'] += score
+                st['ga'] += opp_score
+                st['gd'] = st['gf'] - st['ga']
+                if score > opp_score:
+                    result, pts = 'W', 3
+                    st['pts'] += 3; st['w'] += 1
+                elif score == opp_score:
+                    result, pts = 'D', 1
+                    st['pts'] += 1; st['d'] += 1
+                else:
+                    result, pts = 'L', 0
+                    st['l'] += 1
+                st['games'].append({
+                    'result': result, 'pts': pts,
+                    'score': score, 'opp_score': opp_score,
+                    'opp_name': opp_disp, 'live': False,
+                })
+        elif g['live']:
+            for team, opp_disp in [(t1, g['team2_display']), (t2, g['team1_display'])]:
+                get(team)['games'].append({'live': True, 'opp_name': opp_disp, 'result': None, 'pts': None})
+
+    # Assign group IDs via union-find roots
+    group_roots = {}
+    ctr = [0]
+    for team in list(stats.keys()):
+        root = find(team)
+        if root not in group_roots:
+            ctr[0] += 1
+            group_roots[root] = ctr[0]
+        stats[team]['group_id'] = group_roots[root]
+
+    # Calculate group positions within each group
+    groups = {}
+    for team, s in stats.items():
+        groups.setdefault(s['group_id'], []).append((team, s))
+
+    for members in groups.values():
+        sorted_m = sorted(members, key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        group_done = all(x[1]['gp'] == 3 for x in members)
+        for pos, (team, s) in enumerate(sorted_m, 1):
+            s['group_pos'] = pos
+            s['group_done'] = group_done
+
+    return stats
+
+# ── Scoring rules ──────────────────────────────────────────────────────────────
+
+def calculate_scores(roster, team_stats):
+    """
+    Scoring per the rules:
+      Group stage:  3pts win / 1pt draw / 0pts loss
+      Group finish: 1st +4, 2nd +2, 3rd (qualifying) +1  — awarded when group complete
+      Knockout:     +4 per round won (handled when ESPN data available)
+      Bonuses:      Bronze +2, Runner-up +2, Champion +4
+    """
+    result = []
+    for player, teams in roster.items():
+        total = 0
+        team_details = []
+        for team_name in teams:
+            key = norm(team_name)
+            s = team_stats.get(key, {})
+            match_pts = s.get('pts', 0)
+            group_bonus = 0
+            if s.get('group_done'):
+                pos = s.get('group_pos', 99)
+                if pos == 1: group_bonus = 4
+                elif pos == 2: group_bonus = 2
+                elif pos == 3: group_bonus = 1
+
+            team_total = match_pts + group_bonus
+            total += team_total
+
+            # Best possible remaining for this team
+            gp = s.get('gp', 0)
+            if s.get('group_done'):
+                remaining = 0
+                potential_bonus = group_bonus  # already included
+            else:
+                remaining = max(0, 3 - gp) * 3   # win remaining group games
+                potential_bonus = 4               # could still win group
+            knockout_ceiling = 5 * 4 + 4         # 5 rounds + champion bonus
+
+            team_details.append({
+                'name': team_name,
+                'match_pts': match_pts,
+                'group_bonus': group_bonus,
+                'total': team_total,
+                'gp': gp,
+                'group_pos': s.get('group_pos'),
+                'group_done': s.get('group_done', False),
+                'games': s.get('games', []),
+                '_ceiling': team_total + remaining + (potential_bonus - group_bonus) + knockout_ceiling,
+            })
+
+        best_possible = sum(t['_ceiling'] for t in team_details)
+        result.append({
+            'name': player,
+            'total': total,
+            'best_possible': best_possible,
+            'teams': [{k:v for k,v in t.items() if k != '_ceiling'} for t in team_details],
+        })
+
+    result.sort(key=lambda x: x['total'], reverse=True)
+    return result
+
+# ── Monte Carlo simulation ────────────────────────────────────────────────────
+
+def get_remaining_games(done_games, team_stats):
+    """Enumerate all group-stage games not yet played by round-robin within each group."""
+    # Collect already-played pairs (normalized names)
+    played = set()
+    for g in done_games:
+        played.add(frozenset([g['team1'], g['team2']]))
+
+    # Group teams by group_id
+    groups = {}
+    for team, s in team_stats.items():
+        gid = s.get('group_id')
+        if gid is not None:
+            groups.setdefault(gid, []).append(team)
+
+    remaining = []
+    for members in groups.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                pair = frozenset([members[i], members[j]])
+                if pair not in played:
+                    remaining.append((members[i], members[j]))
+    return remaining
+
+
+def run_monte_carlo(roster, team_stats, done_games, n=10000):
+    """
+    Simulate n full tournaments (remaining group games + knockout rounds).
+    Group games: P(W)=P(D)=P(L)=1/3.
+    Knockout: 50/50 per match, +4 pts per round won.
+    Top 2 per group + 8 best 3rd-place teams advance (32 teams total).
+    Returns {player_name: win_probability_pct}.
+    """
+    remaining = get_remaining_games(done_games, team_stats)
+
+    groups = {}
+    for team, s in team_stats.items():
+        gid = s.get('group_id')
+        if gid is not None:
+            groups.setdefault(gid, []).append(team)
+
+    base_pts = {team: s['pts'] for team, s in team_stats.items()}
+    player_teams = {player: [norm(t) for t in teams] for player, teams in roster.items()}
+    win_counts = {p: 0.0 for p in roster}
+
+    for _ in range(n):
+        pts = dict(base_pts)
+
+        # ── Simulate remaining group games ──────────────────────────────
+        for t1, t2 in remaining:
+            r = random.random()
+            if r < 1 / 3:
+                pts[t1] = pts.get(t1, 0) + 3
+            elif r < 2 / 3:
+                pts[t1] = pts.get(t1, 0) + 1
+                pts[t2] = pts.get(t2, 0) + 1
+            else:
+                pts[t2] = pts.get(t2, 0) + 3
+
+        # ── Group bonuses + determine who advances ──────────────────────
+        group_bonus = {}
+        advanced = []      # teams in knockout
+        third_place = []   # (team, pts) for wild-card selection
+
+        for members in groups.values():
+            sorted_m = sorted(members, key=lambda t: -pts.get(t, 0))
+            for i, team in enumerate(sorted_m):
+                group_bonus[team] = [4, 2, 1, 0][i] if i < 4 else 0
+            advanced.extend(sorted_m[:2])           # top 2 advance directly
+            if len(sorted_m) >= 3:
+                third_place.append((sorted_m[2], pts.get(sorted_m[2], 0)))
+
+        # Best 8 third-place teams also advance (WC 2026 format)
+        third_place.sort(key=lambda x: -x[1])
+        advanced.extend(t for t, _ in third_place[:8])  # 24 + 8 = 32 teams
+
+        # ── Simulate knockout rounds (50/50 per match) ──────────────────
+        knockout_bonus = {team: 0 for team in advanced}
+        random.shuffle(advanced)
+        current_round = list(advanced)
+        while len(current_round) > 1:
+            next_round = []
+            for i in range(0, len(current_round) - 1, 2):
+                winner = current_round[i] if random.random() < 0.5 else current_round[i + 1]
+                knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+                next_round.append(winner)
+            if len(current_round) % 2 == 1:          # bye if odd (shouldn't happen at 32)
+                next_round.append(current_round[-1])
+            current_round = next_round
+
+        # ── Player final scores ─────────────────────────────────────────
+        scores = {
+            player: sum(
+                pts.get(t, 0) + group_bonus.get(t, 0) + knockout_bonus.get(t, 0)
+                for t in teams
+            )
+            for player, teams in player_teams.items()
+        }
+
+        mx = max(scores.values()) if scores else 0
+        winners = [p for p, s in scores.items() if s == mx]
+        for w in winners:
+            win_counts[w] += 1.0 / len(winners)
+
+    return {p: round(win_counts[p] / n * 100, 1) for p in win_counts}
+
+
+# ── Main data function ─────────────────────────────────────────────────────────
+
+def get_data():
+    roster = FIXED_ROSTER
+    games = fetch_group_stage_games()
+    team_stats = build_team_stats(games)
+    players = calculate_scores(roster, team_stats)
+    return {
+        'players': players,
+        'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def send_body(self, body: bytes, content_type: str, status: int = 200):
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith('/api/data'):
+            try:
+                data = get_data()
+                body = json.dumps(data).encode()
+                self.send_body(body, 'application/json')
+            except Exception as e:
+                self.send_body(str(e).encode(), 'text/plain', 500)
+        else:
+            body = HTML.encode('utf-8')
+            self.send_body(body, 'text/html; charset=utf-8')
+
+    def log_message(self, fmt, *args):
+        pass  # suppress server log noise
+
+
+if __name__ == '__main__':
+    print(f'⚽ World Cup 2026 Pick\'em Dashboard')
+    print(f'   Running on port {PORT}')
+    HTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
