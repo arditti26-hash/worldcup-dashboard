@@ -710,7 +710,8 @@ from datetime import timedelta
 
 ESPN_NAME_MAP = {
     'czechia': 'czech republic',
-    'bosnia-herzegovina': 'bosnia',
+    'bosnia-herzegovina': 'bosnia',       # with hyphen (stripped before lookup)
+    'bosniaherzegovina': 'bosnia',         # ESPN live format (hyphen stripped by norm)
     'bosnia and herzegovina': 'bosnia',
     'ivory coast': "cote d'ivoire",
     'dr congo': 'congo dr',
@@ -1023,7 +1024,7 @@ TEAM_STRENGTH = {
     'ecuador': 70, 'norway': 70, 'south korea': 70, 'canada': 68,
     'algeria': 67, 'sweden': 67, 'egypt': 66, 'ghana': 65,
     'czech republic': 65, 'tunisia': 64, 'iran': 64, 'scotland': 64,
-    'paraguay': 60, 'bosnia': 60, 'panama': 58, 'saudi arabia': 58,
+    'australia': 68, 'paraguay': 60, 'bosnia': 60, 'panama': 58, 'saudi arabia': 58,
     'qatar': 56, 'south africa': 55, 'uzbekistan': 52, 'congo dr': 50,
     'jordan': 50, 'new zealand': 50, 'cape verde': 48, 'iraq': 48,
     'curacao': 45, 'haiti': 44,
