@@ -301,6 +301,18 @@ body::before {
 .group-table tr.adv-no td.pts { color: #3a5a42; }
 .group-table .team-name-cell { display: flex; align-items: center; gap: 5px; }
 .group-table .owned-dot { color: #facc15; font-size: 8px; }
+.grp-live-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #22c55e; flex-shrink: 0; animation: blink 1s infinite;
+}
+.grp-live-badge {
+  font-size: 9px; font-weight: 800; letter-spacing: 1px;
+  color: #22c55e; background: rgba(34,197,94,0.15);
+  border: 1px solid rgba(34,197,94,0.3); padding: 1px 5px; border-radius: 4px;
+  vertical-align: middle;
+}
+.group-card-live { border-color: rgba(34,197,94,0.3) !important; }
+.group-table tr.grp-live-row td { font-style: italic; }
 @media (max-width: 700px) {
   .standings-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -781,14 +793,17 @@ function renderStandings(groups) {
     const rows = g.entries.map(e => {
       const adv = e.adv === 'yes' ? 'adv-yes' : e.adv === 'maybe' ? 'adv-maybe' : e.adv === 'no' ? 'adv-no' : '';
       const owned = ownedTeams.has(e.team.toLowerCase()) ? '<span class="owned-dot">●</span>' : '';
-      return `<tr class="${adv}">
-        <td><div class="team-name-cell">${owned}<span>${e.team}</span></div></td>
+      const liveDot = e.is_live ? `<span class="grp-live-dot" title="${e.live_score}"></span>` : '';
+      const liveTip = e.is_live ? ` title="LIVE: ${e.live_score}"` : '';
+      return `<tr class="${adv}${e.is_live ? ' grp-live-row' : ''}">
+        <td${liveTip}><div class="team-name-cell">${liveDot}${owned}<span>${e.team}</span></div></td>
         <td>${e.gp}</td><td>${e.w}</td><td>${e.d}</td><td>${e.l}</td>
         <td>${e.gd}</td><td class="pts">${e.pts}</td>
       </tr>`;
     }).join('');
-    return `<div class="group-card">
-      <div class="group-header">${g.name}</div>
+    const liveTag = g.has_live ? '<span class="grp-live-badge">LIVE</span>' : '';
+    return `<div class="group-card${g.has_live ? ' group-card-live' : ''}">
+      <div class="group-header">${g.name} ${liveTag}</div>
       <table class="group-table">
         <thead><tr>
           <th>Team</th><th>GP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>PTS</th>
@@ -1315,14 +1330,31 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
 
 # ── Group standings (from ESPN standings endpoint) ────────────────────────────
 
-def fetch_group_standings():
+def fetch_group_standings(live_games=None):
     """
     Fetch live group standings for all 12 WC 2026 groups from ESPN.
+    Overlays any in-progress game scores on top of the official standings
+    so the table reflects the current live score, not just completed results.
     Returns a list of groups, each with name and sorted entries.
     """
     try:
         url = 'https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings'
         data = fetch_espn_url(url)
+
+        # Build provisional live adjustments: {norm_team: {pts_delta, gd_delta, is_live, score, opp_score, opp_name}}
+        live_adj = {}
+        for g in (live_games or []):
+            if not g.get('live'): continue
+            s1, s2 = g['score1'], g['score2']
+            t1, t2 = g['team1'], g['team2']
+            # Points delta for each team based on current score
+            if s1 > s2:   p1, p2 = 3, 0
+            elif s1 == s2: p1, p2 = 1, 1
+            else:          p1, p2 = 0, 3
+            live_adj[t1] = {'pts': p1, 'gd': s1 - s2, 'is_live': True,
+                            'score': s1, 'opp_score': s2, 'opp': g['team2_display']}
+            live_adj[t2] = {'pts': p2, 'gd': s2 - s1, 'is_live': True,
+                            'score': s2, 'opp_score': s1, 'opp': g['team1_display']}
         groups = []
         for child in data.get('children', []):
             name = child.get('name', '')          # e.g. "Group A"
@@ -1338,21 +1370,32 @@ def fetch_group_standings():
                     adv = 'no'
                 else:
                     adv = ''
+                team_disp = e['team']['displayName']
+                team_key  = norm(team_disp)
+                adj = live_adj.get(team_key, {})
+                base_pts = int(stats.get('P',  '0'))
+                base_gd  = int((stats.get('GD','0') or '0').replace('+',''))
+                live_pts = base_pts + adj.get('pts', 0)
+                live_gd  = base_gd  + adj.get('gd',  0)
                 entries.append({
-                    'team': e['team']['displayName'],
-                    'gp':   stats.get('GP', '0'),
-                    'w':    stats.get('W',  '0'),
-                    'd':    stats.get('D',  '0'),
-                    'l':    stats.get('L',  '0'),
-                    'gf':   stats.get('F',  '0'),
-                    'ga':   stats.get('A',  '0'),
-                    'gd':   stats.get('GD', '0'),
-                    'pts':  stats.get('P',  '0'),
-                    'rank': stats.get('R',  '99'),
-                    'adv':  adv,
+                    'team':    team_disp,
+                    'gp':      stats.get('GP', '0'),
+                    'w':       stats.get('W',  '0'),
+                    'd':       stats.get('D',  '0'),
+                    'l':       stats.get('L',  '0'),
+                    'gf':      stats.get('F',  '0'),
+                    'ga':      stats.get('A',  '0'),
+                    'gd':      ('+' if live_gd > 0 else '') + str(live_gd),
+                    'pts':     str(live_pts),
+                    'rank':    stats.get('R',  '99'),
+                    'adv':     adv,
+                    'is_live': adj.get('is_live', False),
+                    'live_score': f"{adj['score']}–{adj['opp_score']} vs {adj['opp']}" if adj.get('is_live') else '',
                 })
-            entries.sort(key=lambda x: int(x.get('rank', 99)))
-            groups.append({'name': name, 'entries': entries})
+            # Re-sort by live pts + gd (not ESPN's pre-game rank) so table reflects current score
+            entries.sort(key=lambda x: (-int(x['pts']), -int((x['gd'] or '0').replace('+',''))))
+            has_live = any(e['is_live'] for e in entries)
+            groups.append({'name': name, 'entries': entries, 'has_live': has_live})
 
         # ── Correct the yellow "wildcard" highlighting ───────────────────────
         # ESPN marks ALL current 3rd-place teams as "Best 8 advance", but only
@@ -1386,7 +1429,8 @@ def get_data():
     players = calculate_scores(roster, team_stats)
     done_games = [g for g in games if g['done']]
     sim_probs = run_monte_carlo(roster, team_stats, done_games, n=10000)
-    group_standings = fetch_group_standings()
+    live_games = [g for g in games if g.get('live')]
+    group_standings = fetch_group_standings(live_games=live_games)
     return {
         'players': players,
         'sim_probs': sim_probs,
