@@ -242,6 +242,10 @@ body::before {
   font-weight: 700; letter-spacing: 1px;
 }
 
+.game-venue {
+  font-size: 10px; color: #4a7a56; margin-top: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .schedule-loading { padding: 32px 18px; text-align: center; color: #2d4a36; font-size: 13px; }
 .schedule-error { padding: 24px 18px; text-align: center; color: #5b7a64; font-size: 12px; }
 
@@ -629,6 +633,11 @@ function renderSchedule(games) {
         </div>`;
     }).join('');
 
+    const venue = comp.venue || {};
+    const stadiumName = venue.fullName || '';
+    const city = venue.address?.city || '';
+    const venueLabel = stadiumName ? `${stadiumName}${city ? ' · ' + city : ''}` : (city || '');
+
     return `
     <div class="game-item">
       <div class="game-time">
@@ -636,6 +645,7 @@ function renderSchedule(games) {
         ${timeLabel}
       </div>
       <div class="game-teams">${teamsHtml}</div>
+      ${venueLabel ? `<div class="game-venue">📍 ${venueLabel}</div>` : ''}
     </div>`;
   }).join('');
 
