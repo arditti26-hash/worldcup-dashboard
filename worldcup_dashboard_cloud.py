@@ -1364,6 +1364,7 @@ def get_data():
     players = calculate_scores(roster, team_stats)
     done_games = [g for g in games if g['done']]
     sim_probs = run_monte_carlo(roster, team_stats, done_games, n=10000)
+    group_standings = fetch_group_standings()
     return {
         'players': players,
         'sim_probs': sim_probs,
