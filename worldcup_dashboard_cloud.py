@@ -154,6 +154,16 @@ body::before {
 .pts-low   { color: #facc15; }
 .pts-high  { color: #22c55e; }
 
+/* ── Pip tooltip (global, attached to body to avoid overflow:hidden clipping) ── */
+#pip-tooltip {
+  display: none; position: fixed; z-index: 9999;
+  background: #0d2b17; border: 1px solid #2d5a3a;
+  color: #c3d9c7; font-size: 11px; font-family: sans-serif;
+  white-space: nowrap; padding: 6px 10px; border-radius: 7px;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+}
+
 /* ── Game pips (styled like ref cards: green win, yellow draw, red loss) ── */
 .game-pips { display: flex; gap: 3px; align-items: center; }
 .pip {
@@ -249,6 +259,55 @@ body::before {
 .schedule-loading { padding: 32px 18px; text-align: center; color: #2d4a36; font-size: 13px; }
 .schedule-error { padding: 24px 18px; text-align: center; color: #5b7a64; font-size: 12px; }
 
+/* ── Group Standings Section ── */
+.standings-section {
+  margin-top: 32px; padding: 0 0 32px;
+}
+.standings-title {
+  font-family: 'Oswald', sans-serif; font-size: 13px; font-weight: 700;
+  letter-spacing: 2px; text-transform: uppercase; color: #4a7a56;
+  padding: 0 0 14px; border-bottom: 1px solid #1a3a22; margin-bottom: 18px;
+}
+.standings-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+}
+.group-card {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.10);
+  border-radius: 12px; overflow: hidden;
+}
+.group-header {
+  background: #0f2a18; padding: 7px 12px;
+  font-family: 'Oswald', sans-serif; font-size: 12px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: #facc15;
+}
+.group-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.group-table th {
+  padding: 4px 6px; color: #4a7a56; font-weight: 600;
+  text-align: center; border-bottom: 1px solid #143420;
+}
+.group-table th:first-child { text-align: left; padding-left: 10px; }
+.group-table td {
+  padding: 5px 6px; text-align: center; color: #8aad92;
+  border-bottom: 1px solid #0d2015;
+}
+.group-table td:first-child { text-align: left; padding-left: 10px; }
+.group-table tr:last-child td { border-bottom: none; }
+.group-table td.pts { font-weight: 800; color: #c3d9c7; }
+.group-table tr.adv-yes td { color: #22c55e; }
+.group-table tr.adv-yes td.pts { color: #22c55e; font-weight: 900; }
+.group-table tr.adv-maybe td { color: #facc15; }
+.group-table tr.adv-maybe td.pts { color: #facc15; font-weight: 900; }
+.group-table tr.adv-no td { color: #3a5a42; }
+.group-table tr.adv-no td.pts { color: #3a5a42; }
+.group-table .team-name-cell { display: flex; align-items: center; gap: 5px; }
+.group-table .owned-dot { color: #facc15; font-size: 8px; }
+@media (max-width: 700px) {
+  .standings-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .standings-grid { grid-template-columns: 1fr; }
+}
+
 /* ── Monte Carlo Panel ── */
 .mc-panel {
   background: #0a1f12; border: 1px solid rgba(250,204,21,0.12);
@@ -326,6 +385,13 @@ body::before {
   </div>
 
 </div><!-- end page-body -->
+
+<div class="standings-section">
+  <div class="standings-title">⚽ Group Standings</div>
+  <div class="standings-grid" id="standings-grid">
+    <div style="color:#4a7a56;font-size:12px;padding:12px;">Loading standings…</div>
+  </div>
+</div>
 
 </div><!-- end wrap -->
 
@@ -491,13 +557,14 @@ function buildPips(teamGames) {
   for (let i = 0; i < TOTAL; i++) {
     const g = games[i];
     if (!g) {
-      pips.push(`<span class="pip pip-empty" title="Game ${i+1}: not played yet"></span>`);
+      pips.push(`<span class="pip pip-empty"></span>`);
     } else if (g.live) {
-      pips.push(`<span class="pip pip-live" title="LIVE vs ${g.opp_name}">●</span>`);
+      pips.push(`<span class="pip pip-live" data-tip="🟢 LIVE vs ${g.opp_name}">●</span>`);
     } else {
       const cls = g.result === 'W' ? 'pip-win' : g.result === 'D' ? 'pip-draw' : 'pip-loss';
-      const tip = `${g.result} ${g.score}–${g.opp_score} vs ${g.opp_name} (${g.pts}pt)`;
-      pips.push(`<span class="pip ${cls}" title="${tip}">${g.pts}</span>`);
+      const icon = g.result === 'W' ? '✅' : g.result === 'D' ? '🟡' : '❌';
+      const tip = `${icon} ${g.result}  ${g.score}–${g.opp_score} vs ${g.opp_name}  +${g.pts}pt`;
+      pips.push(`<span class="pip ${cls}" data-tip="${tip}">${g.pts}</span>`);
     }
   }
   return `<div class="game-pips">${pips.join('')}</div>`;
@@ -700,15 +767,60 @@ async function updateAll() {
     data.players.forEach(p => p.teams.forEach(t => ownedTeams.add(t.name.toLowerCase())));
     renderCards(data.players);
     renderMonteCarlo(data.sim_probs, data.players);
+    renderStandings(data.group_standings);
     document.getElementById('footer').textContent = `Scores from ESPN · Roster from Apple Notes · Updated: ${data.updated}`;
   } catch(e) {
     document.getElementById('footer').textContent = 'Error loading data — retrying…';
   }
 }
 
+function renderStandings(groups) {
+  if (!groups || !groups.length) return;
+  const el = document.getElementById('standings-grid');
+  el.innerHTML = groups.map(g => {
+    const rows = g.entries.map(e => {
+      const adv = e.adv === 'yes' ? 'adv-yes' : e.adv === 'maybe' ? 'adv-maybe' : e.adv === 'no' ? 'adv-no' : '';
+      const owned = ownedTeams.has(e.team.toLowerCase()) ? '<span class="owned-dot">●</span>' : '';
+      return `<tr class="${adv}">
+        <td><div class="team-name-cell">${owned}<span>${e.team}</span></div></td>
+        <td>${e.gp}</td><td>${e.w}</td><td>${e.d}</td><td>${e.l}</td>
+        <td>${e.gd}</td><td class="pts">${e.pts}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="group-card">
+      <div class="group-header">${g.name}</div>
+      <table class="group-table">
+        <thead><tr>
+          <th>Team</th><th>GP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>PTS</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+}
+
 updateAll();
 setInterval(updateAll, 30000);
+
+// ── Global pip tooltip (fixed position, never clipped by overflow:hidden) ──
+const pipTip = document.getElementById('pip-tooltip');
+document.addEventListener('mouseover', e => {
+  const pip = e.target.closest('[data-tip]');
+  if (!pip) return;
+  pipTip.textContent = pip.dataset.tip;
+  pipTip.style.display = 'block';
+  const r = pip.getBoundingClientRect();
+  const tw = pipTip.offsetWidth, th = pipTip.offsetHeight;
+  const top = r.top - th - 8 > 0 ? r.top - th - 8 : r.bottom + 8;
+  const left = Math.max(6, Math.min(r.left + r.width/2 - tw/2, window.innerWidth - tw - 6));
+  pipTip.style.top = top + 'px';
+  pipTip.style.left = left + 'px';
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.closest('[data-tip]')) pipTip.style.display = 'none';
+});
 </script>
+<div id="pip-tooltip"></div>
 </body>
 </html>"""
 
@@ -1201,6 +1313,48 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
     return {p: round(win_counts[p] / n * 100, 1) for p in win_counts}
 
 
+# ── Group standings (from ESPN standings endpoint) ────────────────────────────
+
+def fetch_group_standings():
+    """
+    Fetch live group standings for all 12 WC 2026 groups from ESPN.
+    Returns a list of groups, each with name and sorted entries.
+    """
+    try:
+        url = 'https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings'
+        data = fetch_espn_url(url)
+        groups = []
+        for child in data.get('children', []):
+            name = child.get('name', '')          # e.g. "Group A"
+            entries = []
+            for e in child.get('standings', {}).get('entries', []):
+                stats = {s['abbreviation']: s['displayValue'] for s in e.get('stats', [])}
+                note = e.get('note', {}).get('description', '')
+                if 'advance' in note.lower() and 'best' not in note.lower():
+                    adv = 'yes'
+                elif 'best' in note.lower():
+                    adv = 'maybe'
+                elif 'eliminat' in note.lower():
+                    adv = 'no'
+                else:
+                    adv = ''
+                entries.append({
+                    'team': e['team']['displayName'],
+                    'gp':   stats.get('GP', '0'),
+                    'w':    stats.get('W',  '0'),
+                    'd':    stats.get('D',  '0'),
+                    'l':    stats.get('L',  '0'),
+                    'gf':   stats.get('F',  '0'),
+                    'ga':   stats.get('A',  '0'),
+                    'gd':   stats.get('GD', '0'),
+                    'pts':  stats.get('P',  '0'),
+                    'adv':  adv,
+                })
+            groups.append({'name': name, 'entries': entries})
+        return groups
+    except Exception:
+        return []
+
 # ── Main data function ─────────────────────────────────────────────────────────
 
 def get_data():
@@ -1213,6 +1367,7 @@ def get_data():
     return {
         'players': players,
         'sim_probs': sim_probs,
+        'group_standings': group_standings,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
     }
 
