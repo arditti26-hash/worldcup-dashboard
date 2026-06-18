@@ -1348,9 +1348,31 @@ def fetch_group_standings():
                     'ga':   stats.get('A',  '0'),
                     'gd':   stats.get('GD', '0'),
                     'pts':  stats.get('P',  '0'),
+                    'rank': stats.get('R',  '99'),
                     'adv':  adv,
                 })
+            entries.sort(key=lambda x: int(x.get('rank', 99)))
             groups.append({'name': name, 'entries': entries})
+
+        # ── Correct the yellow "wildcard" highlighting ───────────────────────
+        # ESPN marks ALL current 3rd-place teams as "Best 8 advance", but only
+        # the top 8 of the 12 third-place teams actually advance. Collect all
+        # 3rd-place teams, rank them by pts then GD, and only keep top 8 yellow.
+        def gd_sort_key(gd_str):
+            try: return int(gd_str.replace('+', ''))
+            except: return 0
+
+        third_place = []
+        for g in groups:
+            for e in g['entries']:
+                if int(e.get('rank', 99)) == 3:
+                    third_place.append(e)
+                    e['adv'] = 'no'  # reset all to 'no' first
+
+        third_place.sort(key=lambda e: (-int(e.get('pts', 0)), -gd_sort_key(e.get('gd', '0'))))
+        for e in third_place[:8]:
+            e['adv'] = 'maybe'
+
         return groups
     except Exception:
         return []
