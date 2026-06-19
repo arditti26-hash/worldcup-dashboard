@@ -804,19 +804,23 @@ async function updateAll() {
     }));
     renderCards(data.players);
     renderMonteCarlo(data.sim_probs, data.players);
-    renderPowerRankings(data.live_strengths, data.games_used);
+    renderPowerRankings(data.live_strengths, data.games_used, data.odds_used);
     renderStandings(data.group_standings);
-    document.getElementById('footer').textContent = `Scores from ESPN · Roster from Apple Notes · Updated: ${data.updated}`;
+    const oddsNote = data.odds_used > 0 ? ` · DraftKings odds on ${data.odds_used} games` : '';
+    document.getElementById('footer').textContent = `Scores from ESPN${oddsNote} · Updated: ${data.updated}`;
   } catch(e) {
     document.getElementById('footer').textContent = 'Error loading data — retrying…';
   }
 }
 
-function renderPowerRankings(strengths, gamesUsed) {
+function renderPowerRankings(strengths, gamesUsed, oddsUsed) {
   const el = document.getElementById('power-rankings');
   const meta = document.getElementById('power-meta');
   if (!strengths || !el) return;
-  if (meta) meta.textContent = gamesUsed > 0 ? `Elo-adjusted from ${gamesUsed} games played` : 'Pre-tournament baseline';
+  const parts = [];
+  if (gamesUsed > 0) parts.push(`Elo-adjusted · ${gamesUsed} games played`);
+  if (oddsUsed > 0) parts.push(`DraftKings odds on ${oddsUsed} upcoming games`);
+  if (meta) meta.textContent = parts.length ? parts.join(' · ') : 'Pre-tournament baseline';
 
   // Sort teams by current live strength, show all teams in the roster
   const rosterTeams = new Set();
@@ -1046,6 +1050,19 @@ def fetch_group_stage_games():
                 t1, t2 = cs[0], cs[1]
                 s1 = int(t1.get('score') or 0)
                 s2 = int(t2.get('score') or 0)
+                # Extract DraftKings moneyline odds (home=t1, away=t2)
+                ml_home = ml_away = ml_draw = None
+                try:
+                    odds_obj = comp.get('odds', [{}])[0]
+                    ml = odds_obj.get('moneyline', {})
+                    ml_home = ml.get('home', {}).get('close', {}).get('odds')
+                    ml_away = ml.get('away', {}).get('close', {}).get('odds')
+                    ml_draw = ml.get('draw', {}).get('close', {}).get('odds')
+                    if ml_home is not None: ml_home = float(ml_home)
+                    if ml_away is not None: ml_away = float(ml_away)
+                    if ml_draw is not None: ml_draw = float(ml_draw)
+                except Exception:
+                    pass
                 day_games.append({
                     'team1': norm(t1['team']['displayName']),
                     'team2': norm(t2['team']['displayName']),
@@ -1054,6 +1071,7 @@ def fetch_group_stage_games():
                     'score1': s1, 'score2': s2,
                     'done': is_done, 'live': is_live,
                     'date': event['date'],
+                    'ml_home': ml_home, 'ml_away': ml_away, 'ml_draw': ml_draw,
                 })
         except Exception:
             pass
@@ -1248,9 +1266,13 @@ TEAM_STRENGTH = {
 def strength(team):
     return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
 
-def compute_live_strengths(done_games):
-    """Apply Elo updates from every completed tournament game to the baseline ratings.
-    K=50 (standard World Cup weight). Returns updated strength dict."""
+def compute_live_strengths(done_games, scheduled_games=None):
+    """Compute live-adjusted team strengths from two sources:
+    1. Elo updates (K=50) from every completed tournament game.
+    2. Odds-implied ratings from DraftKings moneylines on upcoming games.
+    Final rating = 50% Elo-adjusted + 50% odds-implied (where odds exist).
+    Falls back to pure Elo for teams with no upcoming odds."""
+    import math
     live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
     for g in done_games:
         for t in (g['team1'], g['team2']):
@@ -1263,10 +1285,52 @@ def compute_live_strengths(done_games):
         expected1 = 1 / (1 + 10 ** (-(r1 - r2) * 20 / 400))
         s1, s2 = g['score1'], g['score2']
         actual1 = 1.0 if s1 > s2 else (0.5 if s1 == s2 else 0.0)
-        delta = K * (actual1 - expected1) / 20  # convert back to strength-scale
+        delta = K * (actual1 - expected1) / 20
         live[t1] = max(20.0, min(100.0, r1 + delta))
         live[t2] = max(20.0, min(100.0, r2 - delta))
+
+    # Blend with odds-implied ratings from upcoming scheduled games
+    if scheduled_games:
+        implied_sum = {}
+        implied_cnt = {}
+        for g in scheduled_games:
+            p1r = _ml_to_implied(g.get('ml_home'))
+            p2r = _ml_to_implied(g.get('ml_away'))
+            pdr = _ml_to_implied(g.get('ml_draw'))
+            if None in (p1r, p2r, pdr): continue
+            total = p1r + p2r + pdr
+            p1, p2 = p1r / total, p2r / total
+            t1, t2 = g['team1'], g['team2']
+            p1h2h = p1 / (p1 + p2) if (p1 + p2) > 0 else 0.5
+            for team, p_win, opp in ((t1, p1h2h, t2), (t2, 1 - p1h2h, t1)):
+                if 0.02 < p_win < 0.98:
+                    r_opp = live.get(opp, 55.0)
+                    implied_r = r_opp + (-20 * math.log10(1 / p_win - 1))
+                    implied_r = max(20.0, min(100.0, implied_r))
+                    implied_sum[team] = implied_sum.get(team, 0.0) + implied_r
+                    implied_cnt[team] = implied_cnt.get(team, 0) + 1
+        for team in implied_sum:
+            avg_implied = implied_sum[team] / implied_cnt[team]
+            live[team] = 0.5 * live.get(team, 55.0) + 0.5 * avg_implied
     return live
+
+def _ml_to_implied(ml):
+    """American moneyline → raw implied probability (before vig removal)."""
+    if ml is None: return None
+    return (abs(ml) / (abs(ml) + 100)) if ml < 0 else (100 / (ml + 100))
+
+def odds_match_probs(game):
+    """Extract vig-free (p1_win, p_draw, p2_win) from DraftKings moneyline on a game dict.
+    Returns None if odds are missing or malformed."""
+    try:
+        p1r = _ml_to_implied(game['ml_home'])
+        p2r = _ml_to_implied(game['ml_away'])
+        pdr = _ml_to_implied(game['ml_draw'])
+        if None in (p1r, p2r, pdr): return None
+        total = p1r + p2r + pdr  # >1.0 due to vig; normalize to remove it
+        return p1r / total, pdr / total, p2r / total
+    except Exception:
+        return None
 
 def match_probs(t1, t2):
     """
@@ -1310,7 +1374,7 @@ def get_remaining_games(done_games, team_stats):
     return remaining
 
 
-def run_monte_carlo(roster, team_stats, done_games, n=10000):
+def run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=None):
     """
     Simulate n full tournaments (remaining group games + knockout rounds).
     Group games: outcome weighted by team strength (Elo-style) + flat draw rate.
@@ -1330,8 +1394,9 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
     player_teams = {player: [norm(t) for t in teams] for player, teams in roster.items()}
     win_counts = {p: 0.0 for p in roster}
 
-    # Build live-adjusted strengths from completed game results (Elo updates, K=50)
-    live_str = compute_live_strengths(done_games)
+    # Build live-adjusted strengths: Elo from results + odds-implied from upcoming games
+    scheduled = [g for g in (all_games or []) if not g.get('done') and not g.get('live')]
+    live_str = compute_live_strengths(done_games, scheduled_games=scheduled)
     def live_match_probs(t1, t2):
         diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
         p1d = 1 / (1 + 10 ** (-diff / 400))
@@ -1341,8 +1406,26 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
         diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
         return 1 / (1 + 10 ** (-diff / 400))
 
-    # Precompute match probabilities once using live-adjusted strengths
-    match_p = {(t1, t2): live_match_probs(t1, t2) for t1, t2 in remaining}
+    # Build odds lookup from scheduled games: frozenset(t1,t2) → game dict
+    odds_lookup = {}
+    for g in (all_games or []):
+        if not g.get('done') and not g.get('live'):
+            key = frozenset([g['team1'], g['team2']])
+            odds_lookup[key] = g
+
+    odds_used = 0
+    def best_match_probs(t1, t2):
+        nonlocal odds_used
+        g = odds_lookup.get(frozenset([t1, t2]))
+        if g:
+            result = odds_match_probs(g)
+            if result:
+                odds_used += 1
+                return result
+        return live_match_probs(t1, t2)
+
+    # Precompute match probabilities once — sportsbook odds preferred, Elo fallback
+    match_p = {(t1, t2): best_match_probs(t1, t2) for t1, t2 in remaining}
 
     for _ in range(n):
         pts = dict(base_pts)
@@ -1438,6 +1521,7 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
         'probs': {p: round(win_counts[p] / n * 100, 1) for p in win_counts},
         'live_strengths': {t: round(v, 1) for t, v in live_str.items()},
         'games_used': len(done_games),
+        'odds_used': odds_used,
     }
 
 
@@ -1541,7 +1625,7 @@ def get_data():
     team_stats = build_team_stats(games)
     players = calculate_scores(roster, team_stats)
     done_games = [g for g in games if g['done']]
-    mc = run_monte_carlo(roster, team_stats, done_games, n=10000)
+    mc = run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=games)
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
     return {
@@ -1549,6 +1633,7 @@ def get_data():
         'sim_probs': mc['probs'],
         'live_strengths': mc['live_strengths'],
         'games_used': mc['games_used'],
+        'odds_used': mc['odds_used'],
         'group_standings': group_standings,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
     }
