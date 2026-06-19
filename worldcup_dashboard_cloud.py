@@ -1267,12 +1267,10 @@ def strength(team):
     return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
 
 def compute_live_strengths(done_games, scheduled_games=None):
-    """Compute live-adjusted team strengths from two sources:
-    1. Elo updates (K=50) from every completed tournament game.
-    2. Odds-implied ratings from DraftKings moneylines on upcoming games.
-    Final rating = 50% Elo-adjusted + 50% odds-implied (where odds exist).
-    Falls back to pure Elo for teams with no upcoming odds."""
-    import math
+    """Apply Elo updates (K=50) from every completed tournament game to the baseline.
+    Sportsbook odds are used only for match-level probabilities in the Monte Carlo,
+    not to modify team ratings (odds against weak opponents produce artificially low
+    implied ratings for strong teams, distorting the rankings)."""
     live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
     for g in done_games:
         for t in (g['team1'], g['team2']):
@@ -1288,30 +1286,6 @@ def compute_live_strengths(done_games, scheduled_games=None):
         delta = K * (actual1 - expected1) / 20
         live[t1] = max(20.0, min(100.0, r1 + delta))
         live[t2] = max(20.0, min(100.0, r2 - delta))
-
-    # Blend with odds-implied ratings from upcoming scheduled games
-    if scheduled_games:
-        implied_sum = {}
-        implied_cnt = {}
-        for g in scheduled_games:
-            p1r = _ml_to_implied(g.get('ml_home'))
-            p2r = _ml_to_implied(g.get('ml_away'))
-            pdr = _ml_to_implied(g.get('ml_draw'))
-            if None in (p1r, p2r, pdr): continue
-            total = p1r + p2r + pdr
-            p1, p2 = p1r / total, p2r / total
-            t1, t2 = g['team1'], g['team2']
-            p1h2h = p1 / (p1 + p2) if (p1 + p2) > 0 else 0.5
-            for team, p_win, opp in ((t1, p1h2h, t2), (t2, 1 - p1h2h, t1)):
-                if 0.02 < p_win < 0.98:
-                    r_opp = live.get(opp, 55.0)
-                    implied_r = r_opp + (-20 * math.log10(1 / p_win - 1))
-                    implied_r = max(20.0, min(100.0, implied_r))
-                    implied_sum[team] = implied_sum.get(team, 0.0) + implied_r
-                    implied_cnt[team] = implied_cnt.get(team, 0) + 1
-        for team in implied_sum:
-            avg_implied = implied_sum[team] / implied_cnt[team]
-            live[team] = 0.5 * live.get(team, 55.0) + 0.5 * avg_implied
     return live
 
 def _ml_to_implied(ml):
