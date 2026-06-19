@@ -243,6 +243,7 @@ body::before {
 }
 .game-team-name { font-weight: 600; color: #c3d9c7; }
 .game-team-name.owned { color: #22c55e; font-weight: 800; }
+.owner-tag { display:inline-block; font-size:9px; font-weight:700; padding:1px 4px; border-radius:4px; margin-left:4px; vertical-align:middle; letter-spacing:0.03em; }
 .game-score {
   font-size: 14px; font-weight: 800; color: #e8f3ea;
   min-width: 20px; text-align: right;
@@ -443,6 +444,7 @@ function flag(name) {
 
 // All teams owned by any player (for highlighting in schedule)
 let ownedTeams = new Set();
+let teamOwners = {}; // lowercase team name → player name (CARSON/KEITH/LUKE/WILL)
 
 function ptsClass(pts) {
   if (pts === null || pts === undefined) return 'pts-none';
@@ -704,10 +706,14 @@ function renderSchedule(games) {
       const name = c.team?.displayName || c.team?.name || '?';
       const score = c.score;
       const isOwned = ownedTeams.has(name.toLowerCase());
+      const ownerKey = teamOwners[name.toLowerCase()];
+      const ownerTag = ownerKey && C[ownerKey]
+        ? `<span class="owner-tag" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary};border:1px solid ${C[ownerKey].border}">${ownerKey[0]}</span>`
+        : '';
       return `
         ${idx === 1 ? '<div class="game-vs">vs</div>' : ''}
         <div class="game-team">
-          <span class="game-team-name ${isOwned ? 'owned' : ''}">${name}${isOwned ? ' ●' : ''}</span>
+          <span class="game-team-name ${isOwned ? 'owned' : ''}">${name}${ownerTag}</span>
           ${isLive || statusType === 'STATUS_FINAL' ? `<span class="game-score">${score ?? '—'}</span>` : ''}
         </div>`;
     }).join('');
@@ -776,7 +782,12 @@ async function updateAll() {
       fetch('/api/data').then(r => r.json()),
     ]);
     ownedTeams = new Set();
-    data.players.forEach(p => p.teams.forEach(t => ownedTeams.add(t.name.toLowerCase())));
+    teamOwners = {};
+    data.players.forEach(p => p.teams.forEach(t => {
+      const key = t.name.toLowerCase();
+      ownedTeams.add(key);
+      teamOwners[key] = p.name.toUpperCase();
+    }));
     renderCards(data.players);
     renderMonteCarlo(data.sim_probs, data.players);
     renderStandings(data.group_standings);
