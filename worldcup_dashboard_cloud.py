@@ -409,15 +409,15 @@ body::before {
 </div><!-- end page-body -->
 
 <div class="standings-section">
-  <div class="standings-title">📊 Live Power Rankings <span id="power-meta" style="font-size:11px;font-weight:400;color:#4a7a56;margin-left:8px;"></span></div>
-  <div id="power-rankings"></div>
-</div>
-
-<div class="standings-section">
   <div class="standings-title">⚽ Group Standings</div>
   <div class="standings-grid" id="standings-grid">
     <div style="color:#4a7a56;font-size:12px;padding:12px;">Loading standings…</div>
   </div>
+</div>
+
+<div class="standings-section">
+  <div class="standings-title">📊 Live Power Rankings <span id="power-meta" style="font-size:11px;font-weight:400;color:#4a7a56;margin-left:8px;"></span></div>
+  <div id="power-rankings"></div>
 </div>
 
 </div><!-- end wrap -->
@@ -827,8 +827,7 @@ function renderPowerRankings(strengths, gamesUsed) {
     .sort((a, b) => b[1] - a[1]);
 
   const maxStr = entries[0]?.[1] || 100;
-  // Show top 32 (all qualifying-caliber teams)
-  const rows = entries.slice(0, 32).map(([team, val], i) => {
+  const rows = entries.map(([team, val], i) => {
     const base = TEAM_STRENGTH_JS[team] || 55;
     const delta = val - base;
     const deltaStr = delta > 0.05 ? `<span style="color:#22c55e">▲${delta.toFixed(1)}</span>`
