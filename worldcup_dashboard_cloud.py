@@ -272,6 +272,15 @@ body::before {
 .standings-grid {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
 }
+#power-rankings { display: flex; flex-direction: column; gap: 5px; }
+.pr-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 8px; background: #0a1f12; }
+.pr-rank { width: 22px; text-align: right; font-size: 11px; color: #4a7a56; font-weight: 700; flex-shrink: 0; }
+.pr-name { flex: 1; font-size: 12px; color: #d1fae5; }
+.pr-bar-wrap { width: 160px; height: 6px; background: #0f2a18; border-radius: 3px; flex-shrink: 0; }
+.pr-bar { height: 6px; border-radius: 3px; }
+.pr-val { width: 36px; text-align: right; font-size: 11px; color: #4a7a56; font-family: monospace; flex-shrink: 0; }
+.pr-delta { width: 38px; text-align: right; font-size: 10px; flex-shrink: 0; }
+.pr-owner { display: inline-block; font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 3px; margin-left: 4px; vertical-align: middle; }
 .group-card {
   background: #0a1f12; border: 1px solid rgba(250,204,21,0.10);
   border-radius: 12px; overflow: hidden;
@@ -398,6 +407,11 @@ body::before {
   </div>
 
 </div><!-- end page-body -->
+
+<div class="standings-section">
+  <div class="standings-title">📊 Live Power Rankings <span id="power-meta" style="font-size:11px;font-weight:400;color:#4a7a56;margin-left:8px;"></span></div>
+  <div id="power-rankings"></div>
+</div>
 
 <div class="standings-section">
   <div class="standings-title">⚽ Group Standings</div>
@@ -790,12 +804,66 @@ async function updateAll() {
     }));
     renderCards(data.players);
     renderMonteCarlo(data.sim_probs, data.players);
+    renderPowerRankings(data.live_strengths, data.games_used);
     renderStandings(data.group_standings);
     document.getElementById('footer').textContent = `Scores from ESPN · Roster from Apple Notes · Updated: ${data.updated}`;
   } catch(e) {
     document.getElementById('footer').textContent = 'Error loading data — retrying…';
   }
 }
+
+function renderPowerRankings(strengths, gamesUsed) {
+  const el = document.getElementById('power-rankings');
+  const meta = document.getElementById('power-meta');
+  if (!strengths || !el) return;
+  if (meta) meta.textContent = gamesUsed > 0 ? `Elo-adjusted from ${gamesUsed} games played` : 'Pre-tournament baseline';
+
+  // Sort teams by current live strength, show all teams in the roster
+  const rosterTeams = new Set();
+  Object.values(teamOwners).forEach(() => {});
+  Object.keys(teamOwners).forEach(k => rosterTeams.add(k));
+  // Build list of all teams with a strength rating
+  const entries = Object.entries(strengths)
+    .sort((a, b) => b[1] - a[1]);
+
+  const maxStr = entries[0]?.[1] || 100;
+  // Show top 32 (all qualifying-caliber teams)
+  const rows = entries.slice(0, 32).map(([team, val], i) => {
+    const base = TEAM_STRENGTH_JS[team] || 55;
+    const delta = val - base;
+    const deltaStr = delta > 0.05 ? `<span style="color:#22c55e">▲${delta.toFixed(1)}</span>`
+                   : delta < -0.05 ? `<span style="color:#f87171">▼${Math.abs(delta).toFixed(1)}</span>`
+                   : `<span style="color:#4a7a56">—</span>`;
+    const ownerKey = teamOwners[team];
+    const ownerBadge = ownerKey && C[ownerKey]
+      ? `<span class="pr-owner" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary}">${ownerKey[0]}</span>`
+      : '';
+    const barColor = delta > 0.5 ? '#22c55e' : delta < -0.5 ? '#f87171' : '#facc15';
+    const barPct = Math.round(val / maxStr * 100);
+    const displayName = team.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+    return `<div class="pr-row">
+      <div class="pr-rank">${i + 1}</div>
+      <div class="pr-name">${flag(team)} ${displayName}${ownerBadge}</div>
+      <div class="pr-bar-wrap"><div class="pr-bar" style="width:${barPct}%;background:${barColor}"></div></div>
+      <div class="pr-val">${val.toFixed(1)}</div>
+      <div class="pr-delta">${deltaStr}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = rows;
+}
+
+// Baseline strengths for delta display
+const TEAM_STRENGTH_JS = {
+  'argentina':95,'france':94,'spain':92,'england':90,'brazil':90,'portugal':89,
+  'netherlands':87,'germany':86,'belgium':84,'uruguay':81,'croatia':80,'morocco':79,
+  'colombia':78,'switzerland':76,'senegal':76,"cote d'ivoire":74,'mexico':75,
+  'japan':75,'united states':74,'turkiye':72,'austria':71,'ecuador':70,'norway':70,
+  'south korea':70,'canada':68,'algeria':67,'sweden':67,'egypt':66,'ghana':65,
+  'czech republic':65,'tunisia':64,'iran':64,'scotland':64,'australia':68,
+  'paraguay':60,'bosnia':60,'panama':58,'saudi arabia':58,'qatar':56,
+  'south africa':55,'uzbekistan':52,'congo dr':50,'jordan':50,'new zealand':50,
+  'cape verde':48,'iraq':48,'curacao':45,'haiti':44,
+};
 
 function renderStandings(groups) {
   if (!groups || !groups.length) return;
@@ -1181,6 +1249,26 @@ TEAM_STRENGTH = {
 def strength(team):
     return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
 
+def compute_live_strengths(done_games):
+    """Apply Elo updates from every completed tournament game to the baseline ratings.
+    K=50 (standard World Cup weight). Returns updated strength dict."""
+    live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
+    for g in done_games:
+        for t in (g['team1'], g['team2']):
+            if t not in live:
+                live[t] = 55.0
+    K = 50
+    for g in done_games:
+        t1, t2 = g['team1'], g['team2']
+        r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
+        expected1 = 1 / (1 + 10 ** (-(r1 - r2) * 20 / 400))
+        s1, s2 = g['score1'], g['score2']
+        actual1 = 1.0 if s1 > s2 else (0.5 if s1 == s2 else 0.0)
+        delta = K * (actual1 - expected1) / 20  # convert back to strength-scale
+        live[t1] = max(20.0, min(100.0, r1 + delta))
+        live[t2] = max(20.0, min(100.0, r2 - delta))
+    return live
+
 def match_probs(t1, t2):
     """
     Return (p_t1_win, p_draw, p_t2_win) for a group-stage match,
@@ -1243,8 +1331,19 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
     player_teams = {player: [norm(t) for t in teams] for player, teams in roster.items()}
     win_counts = {p: 0.0 for p in roster}
 
-    # Precompute match probabilities once (strength ratings are static)
-    match_p = {(t1, t2): match_probs(t1, t2) for t1, t2 in remaining}
+    # Build live-adjusted strengths from completed game results (Elo updates, K=50)
+    live_str = compute_live_strengths(done_games)
+    def live_match_probs(t1, t2):
+        diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
+        p1d = 1 / (1 + 10 ** (-diff / 400))
+        dr = 0.24
+        return p1d * (1 - dr), dr, (1 - p1d) * (1 - dr)
+    def live_ko_prob(t1, t2):
+        diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
+        return 1 / (1 + 10 ** (-diff / 400))
+
+    # Precompute match probabilities once using live-adjusted strengths
+    match_p = {(t1, t2): live_match_probs(t1, t2) for t1, t2 in remaining}
 
     for _ in range(n):
         pts = dict(base_pts)
@@ -1298,7 +1397,7 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
             is_final = len(current_round) == 2
             for i in range(0, len(current_round) - 1, 2):
                 a, b = current_round[i], current_round[i + 1]
-                p_a = knockout_win_prob(a, b)
+                p_a = live_ko_prob(a, b)
                 winner = a if random.random() < p_a else b
                 loser = b if winner is a else a
                 if is_semifinal:
@@ -1318,7 +1417,7 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
         # ── 3rd-place (bronze) match between the two semifinal losers ───
         if len(semifinal_losers) == 2:
             a, b = semifinal_losers
-            p_a = knockout_win_prob(a, b)
+            p_a = live_ko_prob(a, b)
             bronze_winner = a if random.random() < p_a else b
             knockout_bonus[bronze_winner] = knockout_bonus.get(bronze_winner, 0) + 2
 
@@ -1336,7 +1435,11 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000):
         for w in winners:
             win_counts[w] += 1.0 / len(winners)
 
-    return {p: round(win_counts[p] / n * 100, 1) for p in win_counts}
+    return {
+        'probs': {p: round(win_counts[p] / n * 100, 1) for p in win_counts},
+        'live_strengths': {t: round(v, 1) for t, v in live_str.items()},
+        'games_used': len(done_games),
+    }
 
 
 # ── Group standings (from ESPN standings endpoint) ────────────────────────────
@@ -1439,12 +1542,14 @@ def get_data():
     team_stats = build_team_stats(games)
     players = calculate_scores(roster, team_stats)
     done_games = [g for g in games if g['done']]
-    sim_probs = run_monte_carlo(roster, team_stats, done_games, n=10000)
+    mc = run_monte_carlo(roster, team_stats, done_games, n=10000)
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
     return {
         'players': players,
-        'sim_probs': sim_probs,
+        'sim_probs': mc['probs'],
+        'live_strengths': mc['live_strengths'],
+        'games_used': mc['games_used'],
         'group_standings': group_standings,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
     }
