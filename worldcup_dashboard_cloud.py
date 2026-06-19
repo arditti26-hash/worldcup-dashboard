@@ -875,10 +875,14 @@ function renderStandings(groups) {
     const rows = g.entries.map(e => {
       const adv = e.adv === 'yes' ? 'adv-yes' : e.adv === 'maybe' ? 'adv-maybe' : e.adv === 'no' ? 'adv-no' : '';
       const owned = ownedTeams.has(e.team.toLowerCase()) ? '<span class="owned-dot">●</span>' : '';
+      const ownerKey = teamOwners[e.team.toLowerCase()];
+      const ownerBadge = ownerKey && C[ownerKey]
+        ? `<span class="owner-tag" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary};border:1px solid ${C[ownerKey].border}">${ownerKey[0]}</span>`
+        : '';
       const liveDot = e.is_live ? `<span class="grp-live-dot" title="${e.live_score}"></span>` : '';
       const liveTip = e.is_live ? ` title="LIVE: ${e.live_score}"` : '';
       return `<tr class="${adv}${e.is_live ? ' grp-live-row' : ''}">
-        <td${liveTip}><div class="team-name-cell">${liveDot}${owned}<span>${e.team}</span></div></td>
+        <td${liveTip}><div class="team-name-cell">${liveDot}${owned}<span>${e.team}</span>${ownerBadge}</div></td>
         <td>${e.gp}</td><td>${e.w}</td><td>${e.d}</td><td>${e.l}</td>
         <td>${e.gd}</td><td class="pts">${e.pts}</td>
       </tr>`;
