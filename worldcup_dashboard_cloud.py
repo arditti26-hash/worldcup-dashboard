@@ -1196,10 +1196,22 @@ def calculate_scores(roster, team_stats):
     """
     Scoring per the rules:
       Group stage:  3pts win / 1pt draw / 0pts loss
-      Group finish: 1st +4, 2nd +2, 3rd (qualifying) +1  — awarded when group complete
-      Knockout:     +4 per round won (handled when ESPN data available)
-      Bonuses:      Bronze +2, Runner-up +2, Champion +4
+      Group finish: 1st +4, 2nd +2, 3rd (qualifying wildcard) +1
+      Knockout:     +4 per round won
+      Bronze match: +2 for winner (no +4 for the win)
+      Runner-up:    +2 bonus
+      Champion:     +4 bonus (on top of +4 for winning the final)
     """
+    # Max knockout points by finishing position (1 team per slot):
+    # Champion: 5 wins×4 + 4 bonus = 24
+    # Runner-up: 4 wins×4 + 2 bonus = 18
+    # Bronze: 3 wins×4 + 2 (bronze, not 4) = 14
+    # SF loser: 3 wins×4 = 12
+    # QF loser: 3 wins×4 = 12  (R32 + R16 + QF... wait: R32+R16+QF = 3 wins × 4 = 12)
+    # R16 loser: 2 wins×4 = 8
+    # R32 loser: 1 win×4 = 4
+    KO_SLOTS = [24, 18, 14, 12, 12, 12, 12, 8, 8, 4, 4, 4]
+
     result = []
     for player, teams in roster.items():
         total = 0
@@ -1209,24 +1221,26 @@ def calculate_scores(roster, team_stats):
             s = team_stats.get(key, {})
             match_pts = s.get('pts', 0)
             group_bonus = 0
+            eliminated = False
             if s.get('group_done'):
                 pos = s.get('group_pos', 99)
                 if pos == 1: group_bonus = 4
                 elif pos == 2: group_bonus = 2
                 elif pos == 3 and s.get('advances_wildcard'): group_bonus = 1
+                elif pos >= 4: eliminated = True
+                elif pos == 3 and not s.get('advances_wildcard'): eliminated = True
 
             team_total = match_pts + group_bonus
             total += team_total
 
-            # Best possible remaining for this team
+            # Group stage ceiling (no knockout yet — applied player-level below)
             gp = s.get('gp', 0)
-            if s.get('group_done'):
-                remaining = 0
-                potential_bonus = group_bonus  # already included
+            if s.get('group_done') or eliminated:
+                group_remaining = 0
+                potential_bonus = group_bonus
             else:
-                remaining = max(0, 3 - gp) * 3   # win remaining group games
-                potential_bonus = 4               # could still win group
-            knockout_ceiling = 5 * 4 + 4         # 5 rounds + champion bonus
+                group_remaining = max(0, 3 - gp) * 3
+                potential_bonus = 4  # could still win group
 
             team_details.append({
                 'name': team_name,
@@ -1237,15 +1251,28 @@ def calculate_scores(roster, team_stats):
                 'group_pos': s.get('group_pos'),
                 'group_done': s.get('group_done', False),
                 'games': s.get('games', []),
-                '_ceiling': team_total + remaining + (potential_bonus - group_bonus) + knockout_ceiling,
+                'eliminated': eliminated,
+                '_group_ceiling': team_total + group_remaining + max(0, potential_bonus - group_bonus),
             })
 
-        best_possible = sum(t['_ceiling'] for t in team_details)
+        # Group ceiling: sum of per-team group-stage ceilings
+        group_ceiling_total = sum(t['_group_ceiling'] for t in team_details)
+
+        # Knockout ceiling: declining slots — only 1 team can be champion, 1 runner-up, etc.
+        # Sort eligible teams (not eliminated) by strength desc to assign best slots first
+        eligible = sorted(
+            [t for t in team_details if not t['eliminated']],
+            key=lambda t: strength(norm(t['name'])),
+            reverse=True
+        )
+        ko_ceiling = sum(KO_SLOTS[i] for i in range(min(len(eligible), len(KO_SLOTS))))
+
+        best_possible = group_ceiling_total + ko_ceiling
         result.append({
             'name': player,
             'total': total,
             'best_possible': best_possible,
-            'teams': [{k:v for k,v in t.items() if k != '_ceiling'} for t in team_details],
+            'teams': [{k:v for k,v in t.items() if k not in ('_group_ceiling', 'eliminated')} for t in team_details],
         })
 
     result.sort(key=lambda x: x['total'], reverse=True)
