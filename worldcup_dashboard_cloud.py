@@ -753,13 +753,17 @@ function renderSchedule(games) {
 
 async function updateSchedule() {
   try {
-    // Fetch today + next 3 days to ensure we get 4 games
+    // Fetch yesterday + today + next 3 days (local time, not UTC — avoids missing
+    // late-night games that flip to "tomorrow" in UTC while still today locally)
     const now = new Date();
     const dates = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = -1; i < 4; i++) {
       const d = new Date(now);
       d.setDate(d.getDate() + i);
-      dates.push(d.toISOString().slice(0,10).replace(/-/g,''));
+      const yy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      dates.push(`${yy}${mm}${dd}`);
     }
     const events = await fetchScheduleDates(dates);
     const next4 = getNext4Games(events);
