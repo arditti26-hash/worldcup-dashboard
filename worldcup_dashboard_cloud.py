@@ -147,7 +147,7 @@ body::before {
 }
 .team-name { font-size: 12px; color: #a8c2ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
 .team-flag { font-size: 14px; flex-shrink: 0; line-height: 1; }
-.team-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.team-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
 .team-pts { font-size: 12px; font-weight: 800; min-width: 14px; text-align: right; }
 .pts-none  { color: #1e3a26; }
 .pts-zero  { color: #3f5a47; }
@@ -360,6 +360,20 @@ body::before {
   .header { flex-direction: column; gap: 12px; align-items: flex-start; }
   .lb-row { grid-template-columns: 40px 1fr 56px; }
   .lb-best-col { display: none; }
+}
+@media (max-width: 480px) {
+  body { overflow-x: hidden; }
+  .wrap { padding: 0 10px; }
+  .team-list { grid-template-columns: 1fr; padding: 0 12px 14px; gap: 3px; }
+  .team-name { max-width: none; flex: 1; white-space: normal; }
+  .team-item { padding: 5px 6px; }
+  .card-score { font-size: 34px; }
+  .card-header { padding: 12px 14px 10px; }
+  .standings-grid { grid-template-columns: 1fr; }
+  .group-table { font-size: 10px; }
+  .group-table td, .group-table th { padding: 4px 3px; }
+  .mc-body { padding: 12px; }
+  #power-rankings .pr-bar-wrap { width: 80px; }
 }
 </style>
 </head>
