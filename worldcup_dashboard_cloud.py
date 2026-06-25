@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """World Cup 2026 Pick'em Live Dashboard — reads from Apple Notes via AppleScript"""
 
-import subprocess, json, re, random, os
+import subprocess, json, re, random, os, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
@@ -1626,9 +1626,20 @@ def fetch_group_standings(live_games=None):
     except Exception:
         return []
 
-# ── Main data function ─────────────────────────────────────────────────────────
+# ── Main data function (5-minute server-side cache) ────────────────────────────
+
+_cache = {'data': None, 'ts': 0}
+CACHE_TTL = 300  # seconds — shorter when a live game is in progress
 
 def get_data():
+    now = time.time()
+    cached = _cache['data']
+    # Use shorter TTL (30s) if a live game was detected last run
+    ttl = 30 if (cached and any(
+        g.get('live') for g in cached.get('_live_games', [])
+    )) else CACHE_TTL
+    if cached and (now - _cache['ts']) < ttl:
+        return cached
     roster = FIXED_ROSTER
     games = fetch_group_stage_games()
     team_stats = build_team_stats(games)
@@ -1637,7 +1648,7 @@ def get_data():
     mc = run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=games)
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
-    return {
+    result = {
         'players': players,
         'sim_probs': mc['probs'],
         'live_strengths': mc['live_strengths'],
@@ -1645,7 +1656,11 @@ def get_data():
         'odds_used': mc['odds_used'],
         'group_standings': group_standings,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
+        '_live_games': live_games,  # used by cache TTL logic
     }
+    _cache['data'] = result
+    _cache['ts'] = time.time()
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
