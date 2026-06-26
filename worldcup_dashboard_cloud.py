@@ -1784,17 +1784,18 @@ def fetch_group_standings(live_games=None):
 
 # ESPN slug → human-readable round name + sort order
 KNOCKOUT_ROUND_MAP = {
-    'round-of-16':   ('Round of 32', 1),
-    'quarterfinals': ('Quarterfinals', 2),
-    'semifinals':    ('Semifinals', 3),
-    'third-place':   ('3rd Place',   4),
-    'final':         ('Final',       5),
+    'round-of-32':   ('Round of 32', 1),   # WC2026 new round: 48→32
+    'round-of-16':   ('Round of 16', 2),   # 32→16
+    'quarterfinals': ('Quarterfinals', 3),
+    'semifinals':    ('Semifinals', 4),
+    'third-place':   ('3rd Place',   5),
+    'final':         ('Final',       6),
 }
 
 def fetch_knockout_games():
-    """Fetch all knockout-stage games from ESPN (July 3 – July 20)."""
+    """Fetch all knockout-stage games from ESPN (June 28 – July 20)."""
     dates = []
-    d = datetime(2026, 7, 3)
+    d = datetime(2026, 6, 28)
     end = datetime(2026, 7, 21)
     while d < end:
         dates.append(d.strftime('%Y%m%d'))
@@ -1806,7 +1807,8 @@ def fetch_knockout_games():
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
             data = fetch_espn_url(url)
             for event in data.get('events', []):
-                slug = event.get('season', {}).get('slug', '').lower()
+                slug = event.get('season', {}).get('slug', '') or event.get('competitions', [{}])[0].get('type', {}).get('slug', '')
+                slug = slug.lower()
                 if slug not in KNOCKOUT_ROUND_MAP:
                     continue
                 round_name, round_order = KNOCKOUT_ROUND_MAP[slug]
@@ -1829,6 +1831,7 @@ def fetch_knockout_games():
                 day_games.append({
                     'round': round_name,
                     'round_order': round_order,
+                    'slug': slug,
                     'team1': norm(n1), 'team2': norm(n2),
                     'team1_display': n1, 'team2_display': n2,
                     'score1': s1, 'score2': s2,
@@ -1944,6 +1947,23 @@ class Handler(BaseHTTPRequestHandler):
                 data = get_data()
                 body = json.dumps(data).encode()
                 self.send_body(body, 'application/json')
+            except Exception as e:
+                self.send_body(str(e).encode(), 'text/plain', 500)
+        elif self.path.startswith('/api/ko-debug'):
+            try:
+                # Return raw slug info from ESPN for knockout dates
+                import urllib.request
+                results = []
+                for ds in ['20260628','20260629','20260630','20260701','20260702','20260703']:
+                    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
+                    with urllib.request.urlopen(url, timeout=10) as r:
+                        d = json.loads(r.read())
+                    for ev in d.get('events', []):
+                        slug = ev.get('season', {}).get('slug', 'NONE')
+                        comp = ev['competitions'][0]
+                        t = [c['team']['displayName'] for c in comp['competitors']]
+                        results.append({'date': ds, 'slug': slug, 'teams': t})
+                self.send_body(json.dumps(results, indent=2).encode(), 'application/json')
             except Exception as e:
                 self.send_body(str(e).encode(), 'text/plain', 500)
         else:
