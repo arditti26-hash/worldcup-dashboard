@@ -361,8 +361,8 @@ body::before {
 }
 .ko-team {
   display: flex; align-items: center; gap: 6px;
-  padding: 6px 8px; font-size: 11px; font-weight: 600; color: #8aad92;
-  border-bottom: 1px solid #071510; position: relative;
+  padding: 0 8px; height: 24px; font-size: 11px; font-weight: 600; color: #8aad92;
+  border-bottom: 1px solid #071510; position: relative; overflow: hidden;
 }
 .ko-team:last-child { border-bottom: none; }
 .ko-team.winner { color: #d1fae5; font-weight: 800; }
@@ -386,6 +386,10 @@ body::before {
 .ko-tracker-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
 .ko-tracker-pts { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; line-height: 1; }
 .ko-tracker-label { font-size: 9px; color: #3f6b4a; margin-top: 3px; }
+.ko-tracker-breakdown { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.ko-breakdown-item { font-size: 10px; color: #4a7a56; }
+.ko-breakdown-item strong { font-weight: 800; }
+.ko-breakdown-sep { font-size: 10px; color: #2d4a36; }
 
 /* Footer */
 .footer { text-align: center; color: #2d4a36; font-size: 12px; padding: 24px 0 40px; }
@@ -486,10 +490,12 @@ body::before {
 </div><!-- end page-body -->
 
 <div class="standings-section" id="knockout-section" style="display:none">
-  <div class="standings-title">🏆 Knockout Bracket</div>
-  <div id="knockout-bracket"></div>
-  <div class="standings-title" style="margin-top:24px">📈 Knockout Points Tracker</div>
+  <div class="standings-title">📈 Knockout Points Tracker</div>
   <div id="ko-pts-tracker"></div>
+  <div class="ko-bracket-section">
+    <div class="standings-title" style="margin-top:24px">🏆 Knockout Bracket</div>
+    <div id="knockout-bracket"></div>
+  </div>
 </div>
 
 <div class="standings-section">
@@ -881,69 +887,118 @@ function renderKnockout(koGames, players) {
   const section = document.getElementById('knockout-section');
   const bracketEl = document.getElementById('knockout-bracket');
   const trackerEl = document.getElementById('ko-pts-tracker');
-  if (!koGames || koGames.length === 0) { if (section) section.style.display = 'none'; return; }
   if (section) section.style.display = '';
 
-  // Build player→color map
-  const playerColors = {};
-  (players || []).forEach(p => {
-    const key = p.name.toUpperCase();
-    if (C[key]) playerColors[key] = C[key];
-  });
-
-  // Group by round order
-  const rounds = {};
-  koGames.forEach(g => {
-    const rk = g.round_order + '|' + g.round;
-    if (!rounds[rk]) rounds[rk] = { name: g.round, order: g.round_order, games: [] };
-    rounds[rk].games.push(g);
-  });
-  const sortedRounds = Object.values(rounds).sort((a, b) => a.order - b.order);
-
-  function teamSlot(name, displayName, score, isWinner, isLoser, isLive) {
-    const ownerKey = name ? teamOwners[name.toLowerCase()] : null;
-    const ownerColor = ownerKey && C[ownerKey] ? C[ownerKey].primary : '#2d4a36';
-    const cls = isLive ? 'ko-team live-now' : isWinner ? 'ko-team winner' : isLoser ? 'ko-team loser' : 'ko-team';
-    const label = displayName || (name ? name.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : null) || '<span class="ko-tbd">TBD</span>';
-    const scoreHtml = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
-    const liveHtml = isLive ? '<span class="ko-live-badge">LIVE</span>' : '';
-    return `<div class="${cls}">
-      <div class="ko-owner-bar" style="background:${ownerColor}"></div>
-      ${label}${liveHtml}${scoreHtml}
-    </div>`;
-  }
-
-  const roundsHtml = sortedRounds.map(round => {
-    const gamesHtml = round.games.map(g => {
-      const done = g.done;
-      const live = g.live;
-      const t1win = done && g.score1 > g.score2;
-      const t2win = done && g.score2 > g.score1;
-      return `<div class="ko-game">
-        ${teamSlot(g.team1, g.team1_display, done || live ? g.score1 : null, t1win, done && !t1win, live)}
-        ${teamSlot(g.team2, g.team2_display, done || live ? g.score2 : null, t2win, done && !t2win, live)}
-      </div>`;
-    }).join('');
-    return `<div class="ko-round">
-      <div class="ko-round-title">${round.name}</div>
-      ${gamesHtml}
-    </div>`;
-  }).join('');
-
-  bracketEl.innerHTML = `<div class="ko-rounds">${roundsHtml}</div>`;
-
-  // Points tracker
-  const playerOrder = (players || []).map(p => p.name.toUpperCase());
-  trackerEl.innerHTML = `<div class="ko-tracker">${playerOrder.map(name => {
-    const p = (players || []).find(pl => pl.name.toUpperCase() === name);
-    const pts = p ? (p.ko_pts || 0) : 0;
+  // ── Points Tracker ──────────────────────────────────────────────
+  const playerOrder = [...(players || [])].sort((a, b) => (b.total || 0) - (a.total || 0));
+  trackerEl.innerHTML = `<div class="ko-tracker">${playerOrder.map(p => {
+    const name = p.name.toUpperCase();
+    const koPts = p.ko_pts || 0;
+    const total = p.total || 0;
+    const groupPts = total - koPts;
     const col = C[name] || { primary: '#facc15', bg: 'rgba(250,204,21,0.1)', border: 'rgba(250,204,21,0.2)' };
     return `<div class="ko-tracker-card" style="border-color:${col.border};background:${col.bg}">
       <div class="ko-tracker-name" style="color:${col.primary}">${name}</div>
-      <div class="ko-tracker-pts" style="color:${col.primary}">${pts}</div>
-      <div class="ko-tracker-label">KO pts</div>
+      <div class="ko-tracker-pts" style="color:${col.primary}">${total}</div>
+      <div class="ko-tracker-label">total pts</div>
+      <div class="ko-tracker-breakdown">
+        <span class="ko-breakdown-item">Group <strong style="color:${col.primary}">${groupPts}</strong></span>
+        <span class="ko-breakdown-sep">+</span>
+        <span class="ko-breakdown-item">KO <strong style="color:${col.primary}">${koPts}</strong></span>
+      </div>
     </div>`;
   }).join('')}</div>`;
+
+  if (!koGames || koGames.length === 0) return;
+
+  // ── Bracket ─────────────────────────────────────────────────────
+  // Layout constants — must match .ko-team height in CSS (24px × 2 = 48px game)
+  const GAME_H  = 48;   // px: height of one game card (2 × 24px team rows)
+  const SLOT    = 72;   // px: vertical slot for one R32 game (gap = 72-48=24px)
+  const COL_W   = 168;  // px: column width
+  const CONN    = 32;   // px: connector width between columns
+
+  // Vertical center of bracket position (roundIdx, gameIdx)
+  function center(r, i) { return (i + 0.5) * SLOT * Math.pow(2, r); }
+  function top(r, i)    { return center(r, i) - GAME_H / 2; }
+
+  const TOTAL_H = 16 * SLOT; // 1152px — full bracket height
+
+  // Group games by round
+  const rounds = {};
+  koGames.forEach(g => {
+    const k = g.round_order;
+    if (!rounds[k]) rounds[k] = { name: g.round, order: g.round_order, games: [] };
+    rounds[k].games.push(g);
+  });
+  const allRounds = Object.values(rounds).sort((a, b) => a.order - b.order);
+  const bracketRounds = allRounds.filter(r => r.name !== '3rd Place');
+  const thirdPlace    = allRounds.find(r => r.name === '3rd Place');
+
+  // Render a single team row
+  function teamRow(name, display, score, winner, loser, live) {
+    const ok  = name ? teamOwners[name.toLowerCase()] : null;
+    const bar = ok && C[ok] ? C[ok].primary : '#1a3322';
+    const cls = live ? 'ko-team live-now' : winner ? 'ko-team winner' : loser ? 'ko-team loser' : 'ko-team';
+    const lbl = display || (name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '') || '<span class="ko-tbd">TBD</span>';
+    const sc  = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
+    const lv  = live ? '<span class="ko-live-badge">LIVE</span>' : '';
+    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${lbl}${lv}${sc}</div>`;
+  }
+
+  // Render one game card
+  function gameCard(g) {
+    const done = g.done, live = g.live;
+    const t1w = done && g.score1 > g.score2, t2w = done && g.score2 > g.score1;
+    return `<div class="ko-game">
+      ${teamRow(g.team1, g.team1_display, done||live ? g.score1 : null, t1w, done&&!t1w, live)}
+      ${teamRow(g.team2, g.team2_display, done||live ? g.score2 : null, t2w, done&&!t2w, live)}
+    </div>`;
+  }
+
+  // Render each round column with absolute-positioned games + connector lines
+  const LINE = 'rgba(250,204,21,0.35)';
+  const cols = bracketRounds.map((round, rIdx) => {
+    let inner = '';
+
+    // Game cards
+    round.games.forEach((g, gIdx) => {
+      const t = Math.round(top(rIdx, gIdx));
+      inner += `<div style="position:absolute;top:${t}px;left:0;right:0">${gameCard(g)}</div>`;
+    });
+
+    // Right-side connector lines (bracket shape joining pairs → next round)
+    if (rIdx < bracketRounds.length - 1) {
+      for (let i = 0; i < round.games.length; i += 2) {
+        const c1  = Math.round(center(rIdx, i));
+        const c2  = Math.round(center(rIdx, i + 1));
+        const mid = Math.round((c1 + c2) / 2);
+        const hx  = CONN / 2 - 1;
+        // horizontal stubs out from each game
+        inner += `<div style="position:absolute;left:${COL_W}px;top:${c1}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+        inner += `<div style="position:absolute;left:${COL_W}px;top:${c2}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+        // vertical bar connecting them
+        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${c1}px;width:1px;height:${c2-c1}px;background:${LINE}"></div>`;
+        // center stub leading to next column
+        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${mid}px;width:${hx+1}px;height:1px;background:${LINE}"></div>`;
+      }
+    }
+
+    return `<div style="position:relative;width:${COL_W}px;height:${TOTAL_H}px;flex-shrink:0;margin-right:${CONN}px">
+      <div class="ko-round-title" style="position:sticky;top:0">${round.name}</div>
+      ${inner}
+    </div>`;
+  }).join('');
+
+  // 3rd place game (separate, below bracket)
+  const thirdHtml = thirdPlace ? `<div style="margin-top:20px">
+    <div class="ko-round-title">3rd Place</div>
+    <div style="max-width:${COL_W}px">${thirdPlace.games.map(gameCard).join('')}</div>
+  </div>` : '';
+
+  if (bracketEl) bracketEl.innerHTML = `
+    <div style="display:flex;overflow-x:auto;padding:4px 4px 20px;align-items:flex-start;-webkit-overflow-scrolling:touch">${cols}</div>
+    ${thirdHtml}`;
 }
 
 async function updateAll() {
