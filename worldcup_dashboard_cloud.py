@@ -894,24 +894,22 @@ function renderKnockout(koGames, players) {
   // Group by round order
   const rounds = {};
   koGames.forEach(g => {
-    const rk = g.round_order + '|' + g.round_name;
-    if (!rounds[rk]) rounds[rk] = { name: g.round_name, order: g.round_order, games: [] };
+    const rk = g.round_order + '|' + g.round;
+    if (!rounds[rk]) rounds[rk] = { name: g.round, order: g.round_order, games: [] };
     rounds[rk].games.push(g);
   });
   const sortedRounds = Object.values(rounds).sort((a, b) => a.order - b.order);
 
-  function teamSlot(name, score, isWinner, isLoser, isLive) {
+  function teamSlot(name, displayName, score, isWinner, isLoser, isLive) {
     const ownerKey = name ? teamOwners[name.toLowerCase()] : null;
     const ownerColor = ownerKey && C[ownerKey] ? C[ownerKey].primary : '#2d4a36';
     const cls = isLive ? 'ko-team live-now' : isWinner ? 'ko-team winner' : isLoser ? 'ko-team loser' : 'ko-team';
-    const displayName = name
-      ? name.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
-      : '<span class="ko-tbd">TBD</span>';
+    const label = displayName || (name ? name.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ') : null) || '<span class="ko-tbd">TBD</span>';
     const scoreHtml = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
     const liveHtml = isLive ? '<span class="ko-live-badge">LIVE</span>' : '';
     return `<div class="${cls}">
       <div class="ko-owner-bar" style="background:${ownerColor}"></div>
-      ${displayName}${liveHtml}${scoreHtml}
+      ${label}${liveHtml}${scoreHtml}
     </div>`;
   }
 
@@ -922,8 +920,8 @@ function renderKnockout(koGames, players) {
       const t1win = done && g.score1 > g.score2;
       const t2win = done && g.score2 > g.score1;
       return `<div class="ko-game">
-        ${teamSlot(g.team1, done || live ? g.score1 : null, t1win, done && !t1win, live)}
-        ${teamSlot(g.team2, done || live ? g.score2 : null, t2win, done && !t2win, live)}
+        ${teamSlot(g.team1, g.team1_display, done || live ? g.score1 : null, t1win, done && !t1win, live)}
+        ${teamSlot(g.team2, g.team2_display, done || live ? g.score2 : null, t2win, done && !t2win, live)}
       </div>`;
     }).join('');
     return `<div class="ko-round">
