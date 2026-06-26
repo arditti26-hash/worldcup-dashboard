@@ -346,6 +346,47 @@ body::before {
 .mc-bar-fill { height: 100%; border-radius: 4px; transition: width 1s ease; }
 .mc-pct { font-size: 15px; font-weight: 900; }
 
+/* ── Knockout Bracket ── */
+.ko-rounds { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; }
+.ko-round { min-width: 160px; flex-shrink: 0; }
+.ko-round-title {
+  font-family: 'Oswald', sans-serif; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.5px; color: #facc15;
+  text-align: center; margin-bottom: 8px; padding: 4px 0;
+  border-bottom: 1px solid rgba(250,204,21,0.2);
+}
+.ko-game {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.1);
+  border-radius: 8px; overflow: hidden; margin-bottom: 8px;
+}
+.ko-team {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; font-size: 11px; font-weight: 600; color: #8aad92;
+  border-bottom: 1px solid #071510; position: relative;
+}
+.ko-team:last-child { border-bottom: none; }
+.ko-team.winner { color: #d1fae5; font-weight: 800; }
+.ko-team.loser { opacity: 0.4; }
+.ko-team.live-now { color: #22c55e; }
+.ko-owner-bar { width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
+.ko-score { margin-left: auto; font-size: 12px; font-weight: 900; flex-shrink: 0; }
+.ko-live-badge {
+  font-size: 8px; font-weight: 800; color: #22c55e; background: rgba(34,197,94,0.15);
+  padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+}
+.ko-tbd { color: #2d4a36; font-style: italic; font-size: 10px; }
+
+/* Knockout points tracker */
+.ko-tracker { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.ko-tracker-card {
+  flex: 1; min-width: 100px; background: #0a1f12;
+  border-radius: 12px; padding: 12px 14px; text-align: center;
+  border: 1px solid rgba(250,204,21,0.1);
+}
+.ko-tracker-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.ko-tracker-pts { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; line-height: 1; }
+.ko-tracker-label { font-size: 9px; color: #3f6b4a; margin-top: 3px; }
+
 /* Footer */
 .footer { text-align: center; color: #2d4a36; font-size: 12px; padding: 24px 0 40px; }
 
@@ -361,19 +402,41 @@ body::before {
   .lb-row { grid-template-columns: 40px 1fr 56px; }
   .lb-best-col { display: none; }
 }
-@media (max-width: 480px) {
-  body { overflow-x: hidden; }
-  .wrap { padding: 0 10px; }
-  .team-list { grid-template-columns: 1fr; padding: 0 12px 14px; gap: 3px; }
-  .team-name { max-width: none; flex: 1; white-space: normal; }
-  .team-item { padding: 5px 6px; }
-  .card-score { font-size: 34px; }
+@media (max-width: 540px) {
+  html, body { overflow-x: hidden; max-width: 100vw; }
+  .page-body { padding: 16px 12px; grid-template-columns: 1fr; gap: 16px; }
+  .wrap { padding: 0; }
+
+  /* Leaderboard */
+  .lb-row { grid-template-columns: 36px 1fr 56px; padding: 12px 14px; gap: 8px; }
+  .lb-best-col { display: none; }
+  .lb-score { font-size: 24px; }
+  .lb-player-name { font-size: 15px; }
+
+  /* Player cards */
+  .cards-grid { grid-template-columns: 1fr; gap: 14px; }
   .card-header { padding: 12px 14px 10px; }
+  .card-score { font-size: 34px; }
+  .team-list { grid-template-columns: 1fr; padding: 0 12px 14px; gap: 3px; }
+  .team-name { max-width: none; flex: 1; }
+  .team-item { padding: 5px 6px; }
+
+  /* Sidebar schedule */
+  .schedule-panel { border-radius: 14px; }
+  .game-venue { font-size: 9px; }
+
+  /* Monte Carlo */
+  .mc-body { padding: 12px; }
+
+  /* Power rankings */
+  #power-rankings .pr-bar-wrap { width: 70px; }
+  .pr-name { font-size: 11px; }
+
+  /* Group standings */
   .standings-grid { grid-template-columns: 1fr; }
   .group-table { font-size: 10px; }
-  .group-table td, .group-table th { padding: 4px 3px; }
-  .mc-body { padding: 12px; }
-  #power-rankings .pr-bar-wrap { width: 80px; }
+  .group-table td, .group-table th { padding: 3px 2px; }
+  .owner-tag { display: none; }
 }
 </style>
 </head>
@@ -421,6 +484,13 @@ body::before {
   </div>
 
 </div><!-- end page-body -->
+
+<div class="standings-section" id="knockout-section" style="display:none">
+  <div class="standings-title">🏆 Knockout Bracket</div>
+  <div id="knockout-bracket"></div>
+  <div class="standings-title" style="margin-top:24px">📈 Knockout Points Tracker</div>
+  <div id="ko-pts-tracker"></div>
+</div>
 
 <div class="standings-section">
   <div class="standings-title">⚽ Group Standings</div>
@@ -807,6 +877,77 @@ function renderMonteCarlo(simProbs, players) {
   }).join('');
 }
 
+function renderKnockout(koGames, players) {
+  const section = document.getElementById('knockout-section');
+  const bracketEl = document.getElementById('knockout-bracket');
+  const trackerEl = document.getElementById('ko-pts-tracker');
+  if (!koGames || koGames.length === 0) { if (section) section.style.display = 'none'; return; }
+  if (section) section.style.display = '';
+
+  // Build player→color map
+  const playerColors = {};
+  (players || []).forEach(p => {
+    const key = p.name.toUpperCase();
+    if (C[key]) playerColors[key] = C[key];
+  });
+
+  // Group by round order
+  const rounds = {};
+  koGames.forEach(g => {
+    const rk = g.round_order + '|' + g.round_name;
+    if (!rounds[rk]) rounds[rk] = { name: g.round_name, order: g.round_order, games: [] };
+    rounds[rk].games.push(g);
+  });
+  const sortedRounds = Object.values(rounds).sort((a, b) => a.order - b.order);
+
+  function teamSlot(name, score, isWinner, isLoser, isLive) {
+    const ownerKey = name ? teamOwners[name.toLowerCase()] : null;
+    const ownerColor = ownerKey && C[ownerKey] ? C[ownerKey].primary : '#2d4a36';
+    const cls = isLive ? 'ko-team live-now' : isWinner ? 'ko-team winner' : isLoser ? 'ko-team loser' : 'ko-team';
+    const displayName = name
+      ? name.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
+      : '<span class="ko-tbd">TBD</span>';
+    const scoreHtml = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
+    const liveHtml = isLive ? '<span class="ko-live-badge">LIVE</span>' : '';
+    return `<div class="${cls}">
+      <div class="ko-owner-bar" style="background:${ownerColor}"></div>
+      ${displayName}${liveHtml}${scoreHtml}
+    </div>`;
+  }
+
+  const roundsHtml = sortedRounds.map(round => {
+    const gamesHtml = round.games.map(g => {
+      const done = g.done;
+      const live = g.live;
+      const t1win = done && g.score1 > g.score2;
+      const t2win = done && g.score2 > g.score1;
+      return `<div class="ko-game">
+        ${teamSlot(g.team1, done || live ? g.score1 : null, t1win, done && !t1win, live)}
+        ${teamSlot(g.team2, done || live ? g.score2 : null, t2win, done && !t2win, live)}
+      </div>`;
+    }).join('');
+    return `<div class="ko-round">
+      <div class="ko-round-title">${round.name}</div>
+      ${gamesHtml}
+    </div>`;
+  }).join('');
+
+  bracketEl.innerHTML = `<div class="ko-rounds">${roundsHtml}</div>`;
+
+  // Points tracker
+  const playerOrder = (players || []).map(p => p.name.toUpperCase());
+  trackerEl.innerHTML = `<div class="ko-tracker">${playerOrder.map(name => {
+    const p = (players || []).find(pl => pl.name.toUpperCase() === name);
+    const pts = p ? (p.ko_pts || 0) : 0;
+    const col = C[name] || { primary: '#facc15', bg: 'rgba(250,204,21,0.1)', border: 'rgba(250,204,21,0.2)' };
+    return `<div class="ko-tracker-card" style="border-color:${col.border};background:${col.bg}">
+      <div class="ko-tracker-name" style="color:${col.primary}">${name}</div>
+      <div class="ko-tracker-pts" style="color:${col.primary}">${pts}</div>
+      <div class="ko-tracker-label">KO pts</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 async function updateAll() {
   try {
     const [, data] = await Promise.all([
@@ -824,6 +965,7 @@ async function updateAll() {
     renderMonteCarlo(data.sim_probs, data.players);
     renderPowerRankings(data.live_strengths, data.games_used, data.odds_used);
     renderStandings(data.group_standings);
+    renderKnockout(data.knockout_games, data.players);
     const oddsNote = data.odds_used > 0 ? ` · DraftKings odds on ${data.odds_used} games` : '';
     document.getElementById('footer').textContent = `Scores from ESPN${oddsNote} · Updated: ${data.updated}`;
   } catch(e) {
@@ -1640,6 +1782,107 @@ def fetch_group_standings(live_games=None):
     except Exception:
         return []
 
+# ── Knockout stage games ──────────────────────────────────────────────────────
+
+# ESPN slug → human-readable round name + sort order
+KNOCKOUT_ROUND_MAP = {
+    'round-of-16':   ('Round of 32', 1),
+    'quarterfinals': ('Quarterfinals', 2),
+    'semifinals':    ('Semifinals', 3),
+    'third-place':   ('3rd Place',   4),
+    'final':         ('Final',       5),
+}
+
+def fetch_knockout_games():
+    """Fetch all knockout-stage games from ESPN (July 3 – July 20)."""
+    dates = []
+    d = datetime(2026, 7, 3)
+    end = datetime(2026, 7, 21)
+    while d < end:
+        dates.append(d.strftime('%Y%m%d'))
+        d += timedelta(days=1)
+
+    def fetch_day(ds):
+        day_games = []
+        try:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
+            data = fetch_espn_url(url)
+            for event in data.get('events', []):
+                slug = event.get('season', {}).get('slug', '').lower()
+                if slug not in KNOCKOUT_ROUND_MAP:
+                    continue
+                round_name, round_order = KNOCKOUT_ROUND_MAP[slug]
+                comp = event['competitions'][0]
+                status = comp['status']['type']['name']
+                is_done = status in ('STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT')
+                is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
+                                     'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
+                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
+                cs = comp['competitors']
+                if len(cs) < 2: continue
+                t1, t2 = cs[0], cs[1]
+                n1 = t1['team']['displayName']
+                n2 = t2['team']['displayName']
+                s1 = int(t1.get('score') or 0)
+                s2 = int(t2.get('score') or 0)
+                winner_norm = None
+                if is_done:
+                    winner_norm = norm(n1) if s1 > s2 else norm(n2)
+                day_games.append({
+                    'round': round_name,
+                    'round_order': round_order,
+                    'team1': norm(n1), 'team2': norm(n2),
+                    'team1_display': n1, 'team2_display': n2,
+                    'score1': s1, 'score2': s2,
+                    'done': is_done, 'live': is_live,
+                    'winner': winner_norm,
+                    'date': event['date'],
+                })
+        except Exception:
+            pass
+        return day_games
+
+    games = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        for day_games in ex.map(fetch_day, dates):
+            games.extend(day_games)
+    games.sort(key=lambda g: (g['round_order'], g['date']))
+    return games
+
+def compute_knockout_pts(knockout_games, roster):
+    """Compute actual knockout points earned per player from completed knockout games."""
+    player_teams = {p: set(norm(t) for t in teams) for p, teams in roster.items()}
+    pts = {p: 0 for p in roster}
+
+    # Group games by round for bonus logic
+    by_round = {}
+    for g in knockout_games:
+        by_round.setdefault(g['round'], []).append(g)
+
+    for g in knockout_games:
+        if not g['done'] or not g['winner']:
+            continue
+        w = g['winner']
+        rnd = g['round']
+        for player, teams in player_teams.items():
+            if w in teams:
+                if rnd == '3rd Place':
+                    pts[player] += 2      # bronze: +2 not +4
+                elif rnd == 'Final':
+                    pts[player] += 4 + 4  # win + champion bonus
+                else:
+                    pts[player] += 4      # standard round win
+
+    # Runner-up bonus: +2 for final loser
+    for g in by_round.get('Final', []):
+        if not g['done']: continue
+        loser = g['team2'] if g['winner'] == g['team1'] else g['team1']
+        for player, teams in player_teams.items():
+            if loser in teams:
+                pts[player] += 2
+
+    return pts
+
 # ── Main data function (5-minute server-side cache) ────────────────────────────
 
 _cache = {'data': None, 'ts': 0}
@@ -1662,6 +1905,13 @@ def get_data():
     mc = run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=games)
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
+    knockout_games = fetch_knockout_games()
+    ko_pts = compute_knockout_pts(knockout_games, roster)
+    # Add knockout pts to player totals
+    for p in players:
+        p['ko_pts'] = ko_pts.get(p['name'], 0)
+        p['total'] += p['ko_pts']
+    players.sort(key=lambda x: x['total'], reverse=True)
     result = {
         'players': players,
         'sim_probs': mc['probs'],
@@ -1669,8 +1919,9 @@ def get_data():
         'games_used': mc['games_used'],
         'odds_used': mc['odds_used'],
         'group_standings': group_standings,
+        'knockout_games': knockout_games,
         'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
-        '_live_games': live_games,  # used by cache TTL logic
+        '_live_games': live_games + [g for g in knockout_games if g.get('live')],
     }
     _cache['data'] = result
     _cache['ts'] = time.time()
