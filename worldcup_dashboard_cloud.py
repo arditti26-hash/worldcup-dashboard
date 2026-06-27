@@ -1379,23 +1379,47 @@ def build_team_stats(games):
             s['group_done'] = group_done
 
     # ── Wild-card 3rd-place advancement (best 8 third-placed teams) ─────────
-    # The "+1 for 3rd place" bonus only applies if that team actually advances
-    # to the Round of 32 as one of the 8 best third-place finishers. This can
-    # only be determined for real once every group has finished (12 groups x
-    # 3 games each); until then no team gets credit for it.
+    # Collect all third-place finishers from completed groups.
+    # We award the +1 bonus progressively: a 3rd-place team from a finished group
+    # gets credit as soon as it's mathematically locked into the top 8 (i.e. it
+    # would still be in the top 8 even if all remaining unfinished groups produce
+    # a better third-place team). Once all 12 groups finish we can be exact.
     all_groups_done = len(groups) > 0 and all(
         all(s['gp'] == 3 for _, s in members) for members in groups.values()
     )
+    # Count how many groups are still unfinished (their 3rd-placer is unknown)
+    groups_remaining = sum(
+        1 for members in groups.values()
+        if any(s['gp'] < 3 for _, s in members)
+    )
+
     third_placers = []
     for members in groups.values():
         for team, s in members:
             if s.get('group_pos') == 3:
                 third_placers.append((team, s))
                 s['advances_wildcard'] = False
+
+    # Sort by pts desc, gd desc, gf desc — same as FIFA tiebreakers
+    third_placers.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+
     if all_groups_done:
-        third_placers.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        # All groups done: exact top 8
         for team, s in third_placers[:8]:
             s['advances_wildcard'] = True
+    else:
+        # Partial: a finished-group 3rd placer is safe if even assuming all
+        # remaining groups produce a perfect third-placer (9 pts, high GD)
+        # they would still be in the top 8.
+        BEST_POSSIBLE = {'pts': 9, 'gd': 99, 'gf': 99}
+        hypothetical = third_placers + [
+            (f'__tbd_{i}', BEST_POSSIBLE) for i in range(groups_remaining)
+        ]
+        hypothetical.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        safe_teams = {t for t, _ in hypothetical[:8] if not t.startswith('__tbd')}
+        for team, s in third_placers:
+            if team in safe_teams:
+                s['advances_wildcard'] = True
 
     return stats
 
@@ -1905,6 +1929,44 @@ def fetch_knockout_games():
     games.sort(key=lambda g: (g['round_order'], g['date']))
     return games
 
+def resolve_ko_placeholders(knockout_games, group_standings):
+    """Replace ESPN placeholder names (e.g. 'Group A Winner') with real team names
+    from our standings data, but only for groups that have finished all 3 games."""
+    import re
+    # Build lookup: 'Group A' → [1st_team, 2nd_team, 3rd_team]
+    group_lookup = {}
+    for grp in group_standings:
+        name = grp.get('name', '')   # e.g. 'Group A'
+        entries = grp.get('entries', [])
+        # Only use if all teams have played 3 games
+        if entries and all(int(e.get('gp', 0)) >= 3 for e in entries):
+            group_lookup[name] = [e['team'] for e in entries]
+
+    def resolve(display):
+        if not display:
+            return display
+        # "Group A Winner" / "Group A 1st Place"
+        m = re.match(r'(Group [A-L])\s+(?:Winner|1st)', display, re.I)
+        if m:
+            teams = group_lookup.get(m.group(1))
+            if teams:
+                return teams[0]
+        # "Group A Runner-up" / "Group A 2nd Place"
+        m = re.match(r'(Group [A-L])\s+(?:Runner.?up|2nd)', display, re.I)
+        if m:
+            teams = group_lookup.get(m.group(1))
+            if teams and len(teams) >= 2:
+                return teams[1]
+        return display
+
+    for g in knockout_games:
+        for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
+            resolved = resolve(g.get(key_d, ''))
+            if resolved != g.get(key_d):
+                g[key_d] = resolved
+                g[key_n] = norm(resolved)
+    return knockout_games
+
 def compute_knockout_pts(knockout_games, roster):
     """Compute actual knockout points earned per player from completed knockout games."""
     player_teams = {p: set(norm(t) for t in teams) for p, teams in roster.items()}
@@ -1962,6 +2024,7 @@ def get_data():
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
     knockout_games = fetch_knockout_games()
+    knockout_games = resolve_ko_placeholders(knockout_games, group_standings)
     ko_pts = compute_knockout_pts(knockout_games, roster)
     # Add knockout pts to player totals
     for p in players:
