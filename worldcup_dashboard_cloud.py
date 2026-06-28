@@ -398,6 +398,9 @@ body::before {
 .ko-tracker-label { font-size: 9px; color: #3f6b4a; margin-top: 3px; }
 .ko-tracker-best { font-size: 9px; color: #4a7a56; margin-top: 6px; }
 .ko-tracker-best strong { font-weight: 800; }
+.ko-tracker-alive { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.ko-alive-count { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 900; }
+.ko-alive-label { font-size: 9px; color: #4a7a56; }
 .ko-tracker-breakdown { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
 .ko-breakdown-item { font-size: 10px; color: #4a7a56; }
 .ko-breakdown-item strong { font-weight: 800; }
@@ -476,6 +479,19 @@ body::before {
   </div>
 </div>
 
+<div class="standings-section">
+  <div class="standings-title">📅 Next Games</div>
+  <div class="schedule-panel" style="margin-top:8px">
+    <div class="schedule-header">
+      <span class="schedule-title">FIFA World Cup 2026</span>
+      <span class="schedule-badge" id="schedule-badge">ESPN</span>
+    </div>
+    <div id="schedule-body">
+      <div class="schedule-loading">Loading schedule…</div>
+    </div>
+  </div>
+</div>
+
 <div class="page-body">
 
   <!-- Left: main content -->
@@ -484,19 +500,8 @@ body::before {
     <div class="footer" id="footer"></div>
   </div>
 
-  <!-- Right: schedule sidebar -->
+  <!-- Right: win probability -->
   <div class="sidebar">
-    <div class="section-label">Next Games</div>
-    <div class="schedule-panel">
-      <div class="schedule-header">
-        <span class="schedule-title">FIFA World Cup 2026</span>
-        <span class="schedule-badge" id="schedule-badge">ESPN</span>
-      </div>
-      <div id="schedule-body">
-        <div class="schedule-loading">Loading schedule…</div>
-      </div>
-    </div>
-
     <div class="mc-panel">
       <div class="mc-header">
         <div class="mc-title">🎲 Win Probability</div>
@@ -902,6 +907,18 @@ function renderKnockout(koGames, players) {
   if (section) section.style.display = '';
 
   // ── Points Tracker ──────────────────────────────────────────────
+  // Build set of eliminated teams (lost a completed KO game)
+  const eliminated = new Set();
+  const inBracket = new Set();
+  (koGames || []).forEach(g => {
+    inBracket.add(normalizeName(g.team1));
+    inBracket.add(normalizeName(g.team2));
+    if (g.done && g.winner) {
+      const loser = normalizeName(g.team1) === normalizeName(g.winner) ? normalizeName(g.team2) : normalizeName(g.team1);
+      eliminated.add(loser);
+    }
+  });
+
   const playerOrder = [...(players || [])].sort((a, b) => (b.total || 0) - (a.total || 0));
   trackerEl.innerHTML = `<div class="ko-tracker">${playerOrder.map(p => {
     const name = p.name.toUpperCase();
@@ -909,6 +926,16 @@ function renderKnockout(koGames, players) {
     const total = p.total || 0;
     const groupPts = total - koPts;
     const col = C[name] || { primary: '#facc15', bg: 'rgba(250,204,21,0.1)', border: 'rgba(250,204,21,0.2)' };
+    // Count teams still alive in knockout
+    const alive = (p.teams || []).filter(t => {
+      const tn = normalizeName(t.name);
+      return inBracket.has(tn) && !eliminated.has(tn);
+    });
+    const teamsLeft = alive.length;
+    const teamNames = alive.map(t => {
+      const f = FLAGS[normalizeName(t.name)] || '';
+      return `${f} ${t.name}`;
+    }).join(', ');
     return `<div class="ko-tracker-card" style="border-color:${col.border};background:${col.bg}">
       <div class="ko-tracker-name" style="color:${col.primary}">${name}</div>
       <div class="ko-tracker-pts" style="color:${col.primary}">${total}</div>
@@ -919,6 +946,10 @@ function renderKnockout(koGames, players) {
         <span class="ko-breakdown-item">KO <strong style="color:${col.primary}">${koPts}</strong></span>
       </div>
       <div class="ko-tracker-best">Best possible: <strong style="color:${col.primary}">${p.best_possible ?? '—'}</strong></div>
+      <div class="ko-tracker-alive" title="${teamNames}">
+        <span class="ko-alive-count" style="color:${col.primary}">${teamsLeft}</span>
+        <span class="ko-alive-label"> team${teamsLeft !== 1 ? 's' : ''} left</span>
+      </div>
     </div>`;
   }).join('')}</div>`;
 
