@@ -394,6 +394,8 @@ body::before {
 .ko-tracker-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
 .ko-tracker-pts { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; line-height: 1; }
 .ko-tracker-label { font-size: 9px; color: #3f6b4a; margin-top: 3px; }
+.ko-tracker-best { font-size: 9px; color: #4a7a56; margin-top: 6px; }
+.ko-tracker-best strong { font-weight: 800; }
 .ko-tracker-breakdown { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
 .ko-breakdown-item { font-size: 10px; color: #4a7a56; }
 .ko-breakdown-item strong { font-weight: 800; }
@@ -914,6 +916,7 @@ function renderKnockout(koGames, players) {
         <span class="ko-breakdown-sep">+</span>
         <span class="ko-breakdown-item">KO <strong style="color:${col.primary}">${koPts}</strong></span>
       </div>
+      <div class="ko-tracker-best">Best possible: <strong style="color:${col.primary}">${p.best_possible ?? '—'}</strong></div>
     </div>`;
   }).join('')}</div>`;
 
