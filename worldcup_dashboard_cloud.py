@@ -1559,22 +1559,24 @@ def strength(team):
     return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
 
 def compute_live_strengths(done_games, scheduled_games=None):
-    """Apply Elo updates (K=50) from every completed tournament game to the baseline.
+    """Apply Elo updates from every completed tournament game to the baseline.
+    Group stage uses K=40; knockout rounds use K=80 (higher stakes = larger signal).
     Sportsbook odds are used only for match-level probabilities in the Monte Carlo,
-    not to modify team ratings (odds against weak opponents produce artificially low
-    implied ratings for strong teams, distorting the rankings)."""
+    not to modify team ratings."""
+    # Identify knockout round order values (round_order >= 1 means KO)
     live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
     for g in done_games:
         for t in (g['team1'], g['team2']):
             if t not in live:
                 live[t] = 55.0
-    K = 50
     for g in done_games:
         t1, t2 = g['team1'], g['team2']
         r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
         expected1 = 1 / (1 + 10 ** (-(r1 - r2) * 20 / 400))
         s1, s2 = g['score1'], g['score2']
         actual1 = 1.0 if s1 > s2 else (0.5 if s1 == s2 else 0.0)
+        # Knockout games carry more Elo weight than group games
+        K = 80 if g.get('round_order') else 40
         delta = K * (actual1 - expected1) / 20
         live[t1] = max(20.0, min(100.0, r1 + delta))
         live[t2] = max(20.0, min(100.0, r2 - delta))
@@ -1640,7 +1642,7 @@ def get_remaining_games(done_games, team_stats):
     return remaining
 
 
-def run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=None):
+def run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=None, knockout_games=None):
     """
     Simulate n full tournaments (remaining group games + knockout rounds).
     Group games: outcome weighted by team strength (Elo-style) + flat draw rate.
@@ -1730,39 +1732,80 @@ def run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=None):
             group_bonus[t] = 1
         advanced.extend(t for t, _ in wildcards)  # 24 + 8 = 32 teams
 
-        # ── Simulate knockout rounds (quality-weighted) ──────────────────
-        # Generic rule: +4 pts per win / round advanced.
-        # Exceptions: 3rd-place (bronze) match winner gets +2 instead of +4;
-        # Final loser (runner-up) gets +2 bonus; Final winner (champion) gets
-        # an extra +4 bonus on top of their round-win points.
+        # ── Simulate knockout rounds using actual bracket ────────────────
+        # R32 slots are the actual ESPN matchups (sorted by date = bracket order).
+        # Winners of slots 0&1 meet in R16, winners of 2&3, etc.
+        # Completed games are locked; upcoming ones are simulated.
         knockout_bonus = {team: 0 for team in advanced}
-        random.shuffle(advanced)
-        current_round = list(advanced)
+        advanced_set = set(advanced)
+
+        # Build the 32-slot bracket from actual R32 games
+        r32 = sorted(
+            [g for g in (knockout_games or []) if g.get('round_order') == 1],
+            key=lambda g: g.get('date', '')
+        )
+
+        def resolve_slot(team_norm):
+            """If team is a known real team that advanced, use it; else pick from pool."""
+            if team_norm in advanced_set:
+                return team_norm
+            # Placeholder — draw a random remaining team (fallback only)
+            return random.choice(list(advanced_set)) if advanced_set else team_norm
+
+        # Simulate or lock each R32 game; result = list of 16 winners in bracket order
+        remaining_advanced = set(advanced)
+        r32_winners = []
+        for g in r32:
+            t1 = resolve_slot(g['team1'])
+            t2 = resolve_slot(g['team2'])
+            if g.get('done') and g.get('winner') and g['winner'] in advanced_set:
+                winner = g['winner']
+                loser = t2 if winner == t1 else t1
+            else:
+                p = live_ko_prob(t1, t2)
+                winner = t1 if random.random() < p else t2
+                loser = t2 if winner == t1 else t1
+            knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+            remaining_advanced.discard(t1)
+            remaining_advanced.discard(t2)
+            r32_winners.append(winner)
+
+        # For any advanced teams not yet seeded into a R32 slot (TBD bracket slots),
+        # randomly inject them in pairs so the bracket stays balanced.
+        leftover = list(remaining_advanced)
+        random.shuffle(leftover)
+        while len(leftover) >= 2:
+            a, b = leftover.pop(), leftover.pop()
+            p = live_ko_prob(a, b)
+            winner = a if random.random() < p else b
+            knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+            r32_winners.append(winner)
+
+        # Simulate R16 → SF → Final following bracket pairing
+        current_round = r32_winners
         semifinal_losers = []
         while len(current_round) > 1:
             next_round = []
             is_semifinal = len(current_round) == 4
-            is_final = len(current_round) == 2
+            is_final     = len(current_round) == 2
             for i in range(0, len(current_round) - 1, 2):
                 a, b = current_round[i], current_round[i + 1]
                 p_a = live_ko_prob(a, b)
                 winner = a if random.random() < p_a else b
-                loser = b if winner is a else a
+                loser  = b if winner == a else a
                 if is_semifinal:
                     semifinal_losers.append(loser)
                 if is_final:
-                    # Final winner: +4 round win + +4 champion bonus
                     knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4 + 4
-                    # Runner-up: +2 bonus (no points for the round "win" since they lost)
-                    knockout_bonus[loser] = knockout_bonus.get(loser, 0) + 2
+                    knockout_bonus[loser]  = knockout_bonus.get(loser,  0) + 2
                 else:
                     knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
                 next_round.append(winner)
-            if len(current_round) % 2 == 1:          # bye if odd (shouldn't happen at 32)
+            if len(current_round) % 2 == 1:
                 next_round.append(current_round[-1])
             current_round = next_round
 
-        # ── 3rd-place (bronze) match between the two semifinal losers ───
+        # ── 3rd-place (bronze) match ─────────────────────────────────────
         if len(semifinal_losers) == 2:
             a, b = semifinal_losers
             p_a = live_ko_prob(a, b)
@@ -2044,11 +2087,17 @@ def get_data():
     team_stats = build_team_stats(games)
     players = calculate_scores(roster, team_stats)
     done_games = [g for g in games if g['done']]
-    mc = run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=games)
     live_games = [g for g in games if g.get('live')]
     group_standings = fetch_group_standings(live_games=live_games)
     knockout_games = fetch_knockout_games()
     knockout_games = resolve_ko_placeholders(knockout_games, group_standings)
+    # Include completed knockout games in Elo history so power rankings
+    # reflect actual R32/R16/QF results, not just group stage.
+    done_ko = [g for g in knockout_games if g.get('done')]
+    all_done = done_games + done_ko
+    # Combine group + knockout scheduled games for odds lookup in simulation.
+    all_scheduled = games + [g for g in knockout_games if not g.get('done') and not g.get('live')]
+    mc = run_monte_carlo(roster, team_stats, all_done, n=10000, all_games=all_scheduled, knockout_games=knockout_games)
     ko_pts = compute_knockout_pts(knockout_games, roster)
     # Add knockout pts to player totals
     for p in players:
