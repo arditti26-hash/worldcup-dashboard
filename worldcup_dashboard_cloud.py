@@ -360,8 +360,8 @@ body::before {
   border-radius: 8px; overflow: hidden; margin-bottom: 8px;
 }
 .ko-team {
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 8px; height: 24px; font-size: 11px; font-weight: 600; color: #8aad92;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px; height: 26px; font-size: 11px; font-weight: 600; color: #8aad92;
   border-bottom: 1px solid #071510; position: relative; overflow: hidden;
 }
 .ko-team:last-child { border-bottom: none; }
@@ -375,6 +375,7 @@ body::before {
   padding: 1px 4px; border-radius: 3px; margin-left: 4px;
 }
 .ko-tbd { color: #2d4a36; font-style: italic; font-size: 10px; }
+.ko-flag { font-size: 13px; flex-shrink: 0; margin-right: 3px; line-height: 1; }
 .ko-owner-initial {
   font-size: 9px; font-weight: 900; border: 1px solid; border-radius: 3px;
   padding: 0 3px; margin-right: 4px; flex-shrink: 0; line-height: 16px;
@@ -537,7 +538,7 @@ const FLAGS = {
   'belgium':'🇧🇪','bosnia':'🇧🇦','brazil':'🇧🇷',
   'canada':'🇨🇦','cape verde':'🇨🇻','colombia':'🇨🇴','congo dr':'🇨🇩',
   'croatia':'🇭🇷','czech republic':'🇨🇿','curaçao':'🇨🇼',
-  "cote d'ivoire":"🇨🇮","côte d'ivoire":"🇨🇮",
+  "cote d'ivoire":"🇨🇮","côte d'ivoire":"🇨🇮","ivory coast":"🇨🇮",
   'ecuador':'🇪🇨','egypt':'🇪🇬','england':'🏴󠁧󠁢󠁥󠁮󠁧󠁿',
   'france':'🇫🇷','germany':'🇩🇪','ghana':'🇬🇭',
   'haiti':'🇭🇹','iran':'🇮🇷','iraq':'🇮🇶',
@@ -925,7 +926,7 @@ function renderKnockout(koGames, players) {
 
   // ── Bracket ─────────────────────────────────────────────────────
   // Layout constants — must match .ko-team height in CSS (24px × 2 = 48px game)
-  const GAME_H  = 48;   // px: height of one game card (2 × 24px team rows)
+  const GAME_H  = 52;   // px: height of one game card (2 × 26px team rows)
   const SLOT    = 72;   // px: vertical slot for one R32 game (gap = 72-48=24px)
   const COL_W   = 168;  // px: column width
   const CONN    = 32;   // px: connector width between columns
@@ -952,10 +953,11 @@ function renderKnockout(koGames, players) {
 
   // Render a single team row
   function teamRow(name, display, score, winner, loser, live, roundName) {
-    const ok  = name ? teamOwners[name.toLowerCase()] : null;
+    const ok  = name ? (teamOwners[normalizeName(name)] || teamOwners[name.toLowerCase()]) : null;
     const col = ok && C[ok] ? C[ok] : null;
     const bar = col ? col.primary : '#1a3322';
     const cls = live ? 'ko-team live-now' : winner ? 'ko-team winner' : loser ? 'ko-team loser' : 'ko-team';
+    const teamFlag = name ? `<span class="ko-flag">${flag(normalizeName(name))}</span>` : '';
     const lbl = display || (name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '') || '<span class="ko-tbd">TBD</span>';
     const sc  = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
     const lv  = live ? '<span class="ko-live-badge">LIVE</span>' : '';
@@ -968,7 +970,7 @@ function renderKnockout(koGames, players) {
     const ptsBadge = winner && col
       ? `<span class="ko-pts-badge" style="background:${col.bg};color:${col.primary};border-color:${col.border}">+${pts}</span>`
       : '';
-    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${ownerBadge}${lbl}${lv}${sc}${ptsBadge}</div>`;
+    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${ownerBadge}${teamFlag}${lbl}${lv}${sc}${ptsBadge}</div>`;
   }
 
   // Render one game card
