@@ -1,330 +1,2251 @@
 #!/usr/bin/env python3
-"""Mamacita's Recipes - Arditti Kitchen (cloud deployment with Google Sheets sync)"""
+"""World Cup 2026 Pick'em Live Dashboard — reads from Apple Notes via AppleScript"""
 
-import os, json, re, base64, threading
+import subprocess, json, re, random, os, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
-import urllib.request, urllib.error
+from datetime import datetime
 
-# ── Env config ────────────────────────────────────────────────────────────────
-PORT             = int(os.environ.get("PORT", 8080))
-GITHUB_TOKEN     = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO      = os.environ.get("GITHUB_REPO", "")
-GOOGLE_SHEET_URL = os.environ.get("GOOGLE_SHEET_URL", "")
-CACHE_PATH       = "recipes-cache.json"
+PORT = int(os.environ.get('PORT', 8766))
 
-# ── In-memory recipe store ────────────────────────────────────────────────────
-_cache_lock  = threading.Lock()
-_recipes_mem = None   # dict: url -> recipe; None = not loaded yet
-_syncing     = False
+COLORS = {
+    'CARSON': {'primary': '#10b981', 'bg': 'rgba(16,185,129,0.15)'},
+    'KEITH':  {'primary': '#3b82f6', 'bg': 'rgba(59,130,246,0.15)'},
+    'LUKE':   {'primary': '#f59e0b', 'bg': 'rgba(245,158,11,0.15)'},
+    'WILL':   {'primary': '#8b5cf6', 'bg': 'rgba(139,92,246,0.15)'},
+}
 
-# ── GitHub helpers (READ-ONLY) ─────────────────────────────────────────────────
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Cup 2026 Pick'em</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-def _gh_headers():
-    return {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "mamacitas-recipes/1.0",
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #051208;
+  color: #e8f3ea;
+  min-height: 100vh;
+}
+
+/* Pitch stripes + stadium floodlight glow */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(115deg, rgba(255,255,255,0.018) 0px, rgba(255,255,255,0.018) 60px, transparent 60px, transparent 120px),
+    radial-gradient(ellipse at 15% 0%, rgba(250,204,21,0.07) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 10%, rgba(34,197,94,0.10) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 100%, rgba(34,197,94,0.06) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wrap { position: relative; z-index: 1; }
+
+/* ── Header ── */
+.header {
+  background: linear-gradient(180deg, rgba(6,30,16,0.97) 0%, rgba(8,38,20,0.95) 100%);
+  backdrop-filter: blur(12px);
+  border-bottom: 2px solid rgba(250,204,21,0.25);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 10;
+}
+.header h1 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 28px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #facc15 0%, #22c55e 60%, #16a34a 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.header-sub { color: #5b7a64; font-size: 13px; margin-top: 3px; letter-spacing: 0.3px; }
+.live-badge {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(250,204,21,0.1); border: 1px solid rgba(250,204,21,0.35);
+  padding: 6px 14px; border-radius: 100px;
+  font-size: 12px; font-weight: 700; color: #facc15; letter-spacing: 1px;
+}
+.live-dot {
+  width: 7px; height: 7px; background: #facc15; border-radius: 50%;
+  animation: blink 1.5s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+
+/* ── Main layout: left content + right sidebar ── */
+.page-body {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 28px;
+  align-items: start;
+}
+
+.main-col { min-width: 0; }
+
+.section-label {
+  font-family: 'Oswald', sans-serif;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 2px; color: #3f6b4a; margin-bottom: 14px;
+}
+
+/* ── Leaderboard ── */
+.leaderboard {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.12);
+  border-radius: 20px; overflow: hidden; margin-bottom: 36px;
+}
+.lb-row {
+  display: grid; grid-template-columns: 52px 1fr 72px 130px;
+  align-items: center; padding: 16px 22px;
+  border-bottom: 1px solid #07170d; gap: 12px; transition: background 0.15s;
+}
+.lb-row:last-child { border-bottom: none; }
+.lb-row:hover { background: #14331c55; }
+.lb-row.first { background: rgba(250,204,21,0.06); }
+.lb-rank { font-size: 22px; text-align: center; }
+.lb-player-name { font-size: 18px; font-weight: 800; }
+.lb-player-sub { font-size: 12px; color: #5b7a64; margin-top: 2px; }
+.lb-score { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; text-align: right; line-height: 1; }
+.lb-best-col { text-align: right; }
+.lb-best-label { font-size: 10px; color: #3f6b4a; text-transform: uppercase; letter-spacing: 1px; }
+.lb-best-val { font-size: 15px; font-weight: 700; color: #5b7a64; }
+.best-rank-pill {
+  display: inline-block; margin-top: 4px;
+  padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+}
+
+/* ── Cards Grid ── */
+.cards-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+
+.player-card { background: #0a1f12; border: 1px solid rgba(250,204,21,0.12); border-radius: 20px; overflow: hidden; }
+.card-header {
+  padding: 16px 20px; display: flex; justify-content: space-between; align-items: flex-start;
+  border-bottom-width: 1px; border-bottom-style: solid;
+}
+.card-name { font-family: 'Oswald', sans-serif; font-size: 16px; font-weight: 900; text-transform: uppercase; letter-spacing: 1.5px; }
+.card-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.meta-pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 100px; }
+.card-score { font-family: 'Oswald', sans-serif; font-size: 44px; font-weight: 900; line-height: 1; text-align: right; }
+.card-best { font-size: 11px; font-weight: 600; text-align: right; opacity: 0.5; margin-top: 2px; }
+
+.progress-wrap { padding: 10px 20px 0; }
+.progress-bar { height: 3px; background: #143420; border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
+.progress-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+
+.team-list { padding: 0 20px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.team-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; border-radius: 7px; background: rgba(255,255,255,0.025);
+}
+.team-name { font-size: 12px; color: #a8c2ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
+.team-flag { font-size: 14px; flex-shrink: 0; line-height: 1; }
+.team-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
+.team-pts { font-size: 12px; font-weight: 800; min-width: 14px; text-align: right; }
+.pts-none  { color: #1e3a26; }
+.pts-zero  { color: #3f5a47; }
+.pts-low   { color: #facc15; }
+.pts-high  { color: #22c55e; }
+
+/* ── Pip tooltip (global, attached to body to avoid overflow:hidden clipping) ── */
+#pip-tooltip {
+  display: none; position: fixed; z-index: 9999;
+  background: #0d2b17; border: 1px solid #2d5a3a;
+  color: #c3d9c7; font-size: 11px; font-family: sans-serif;
+  white-space: nowrap; padding: 6px 10px; border-radius: 7px;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+}
+
+/* ── Game pips (styled like ref cards: green win, yellow draw, red loss) ── */
+.game-pips { display: flex; gap: 3px; align-items: center; }
+.pip {
+  width: 14px; height: 17px; border-radius: 3px;
+  font-size: 8px; font-weight: 900;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; cursor: default;
+}
+.pip-win   { background: #22c55e; color: #07170d; }
+.pip-draw  { background: #facc15; color: #07170d; }
+.pip-loss  { background: #ef4444; color: #fff; }
+.pip-live  { background: #22c55e; color: #07170d; animation: blink 1s infinite; }
+.pip-empty { background: transparent; border: 1.5px dashed #1e3a26; border-radius: 3px; }
+.team-bonus { font-size: 10px; font-weight: 800; color: #facc15; margin-left: 2px; }
+.team-live { background: rgba(34,197,94,0.1) !important; border: 1px solid rgba(34,197,94,0.3) !important; }
+.live-pip {
+  display: inline-block; width: 6px; height: 6px;
+  background: #22c55e; border-radius: 50%; flex-shrink: 0;
+  animation: blink 1s ease-in-out infinite;
+}
+
+/* ── Schedule Sidebar ── */
+.sidebar {
+  position: sticky;
+  top: 88px;
+}
+
+.schedule-panel {
+  background: #0a1f12;
+  border: 1px solid rgba(250,204,21,0.12);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.schedule-header {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(250,204,21,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.schedule-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: #5b7a64;
+}
+.schedule-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px;
+  border-radius: 100px; background: rgba(250,204,21,0.15);
+  color: #facc15; letter-spacing: 0.5px;
+}
+
+.game-item {
+  padding: 14px 18px;
+  border-bottom: 1px solid #061a0d;
+  transition: background 0.15s;
+}
+.game-item:last-child { border-bottom: none; }
+.game-item:hover { background: #14331c44; }
+
+.game-time {
+  font-size: 11px; font-weight: 600; color: #5b7a64;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.game-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.dot-live { background: #22c55e; animation: blink 1s infinite; }
+.dot-soon { background: #facc15; }
+.dot-scheduled { background: #2d4a36; }
+
+.game-teams { display: flex; flex-direction: column; gap: 5px; }
+.game-team {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px;
+}
+.game-team-name { font-weight: 600; color: #c3d9c7; }
+.game-team-name.owned { color: #22c55e; font-weight: 800; }
+.owner-tag { display:inline-block; font-size:9px; font-weight:700; padding:1px 4px; border-radius:4px; margin-left:4px; vertical-align:middle; letter-spacing:0.03em; }
+.game-score {
+  font-size: 14px; font-weight: 800; color: #e8f3ea;
+  min-width: 20px; text-align: right;
+}
+.game-vs {
+  text-align: center; font-size: 10px; color: #2d4a36;
+  font-weight: 700; letter-spacing: 1px;
+}
+
+.game-venue {
+  font-size: 10px; color: #4a7a56; margin-top: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.schedule-loading { padding: 32px 18px; text-align: center; color: #2d4a36; font-size: 13px; }
+.schedule-error { padding: 24px 18px; text-align: center; color: #5b7a64; font-size: 12px; }
+
+/* ── Group Standings Section ── */
+.standings-section {
+  margin-top: 32px; padding: 0 0 32px;
+}
+.standings-title {
+  font-family: 'Oswald', sans-serif; font-size: 13px; font-weight: 700;
+  letter-spacing: 2px; text-transform: uppercase; color: #4a7a56;
+  padding: 0 0 14px; border-bottom: 1px solid #1a3a22; margin-bottom: 18px;
+}
+.standings-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+}
+#power-rankings { display: flex; flex-direction: column; gap: 5px; }
+.pr-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 8px; background: #0a1f12; }
+.pr-rank { width: 22px; text-align: right; font-size: 11px; color: #4a7a56; font-weight: 700; flex-shrink: 0; }
+.pr-name { flex: 1; font-size: 12px; color: #d1fae5; }
+.pr-bar-wrap { width: 160px; height: 6px; background: #0f2a18; border-radius: 3px; flex-shrink: 0; }
+.pr-bar { height: 6px; border-radius: 3px; }
+.pr-val { width: 36px; text-align: right; font-size: 11px; color: #4a7a56; font-family: monospace; flex-shrink: 0; }
+.pr-delta { width: 38px; text-align: right; font-size: 10px; flex-shrink: 0; }
+.pr-owner { display: inline-block; font-size: 8px; font-weight: 700; padding: 1px 4px; border-radius: 3px; margin-left: 4px; vertical-align: middle; }
+.group-card {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.10);
+  border-radius: 12px; overflow: hidden;
+}
+.group-header {
+  background: #0f2a18; padding: 7px 12px;
+  font-family: 'Oswald', sans-serif; font-size: 12px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: #facc15;
+}
+.group-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.group-table th {
+  padding: 4px 6px; color: #4a7a56; font-weight: 600;
+  text-align: center; border-bottom: 1px solid #143420;
+}
+.group-table th:first-child { text-align: left; padding-left: 10px; }
+.group-table td {
+  padding: 5px 6px; text-align: center; color: #8aad92;
+  border-bottom: 1px solid #0d2015;
+}
+.group-table td:first-child { text-align: left; padding-left: 10px; }
+.group-table tr:last-child td { border-bottom: none; }
+.group-table td.pts { font-weight: 800; color: #c3d9c7; }
+.group-table tr.adv-yes td { color: #22c55e; }
+.group-table tr.adv-yes td.pts { color: #22c55e; font-weight: 900; }
+.group-table tr.adv-maybe td { color: #facc15; }
+.group-table tr.adv-maybe td.pts { color: #facc15; font-weight: 900; }
+.group-table tr.adv-no td { color: #3a5a42; }
+.group-table tr.adv-no td.pts { color: #3a5a42; }
+.group-table .team-name-cell { display: flex; align-items: center; gap: 5px; }
+.group-table .owned-dot { color: #facc15; font-size: 8px; }
+.grp-live-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #22c55e; flex-shrink: 0; animation: blink 1s infinite;
+}
+.grp-live-badge {
+  font-size: 9px; font-weight: 800; letter-spacing: 1px;
+  color: #22c55e; background: rgba(34,197,94,0.15);
+  border: 1px solid rgba(34,197,94,0.3); padding: 1px 5px; border-radius: 4px;
+  vertical-align: middle;
+}
+.group-card-live { border-color: rgba(34,197,94,0.3) !important; }
+.group-table tr.grp-live-row td { font-style: italic; }
+@media (max-width: 700px) {
+  .standings-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .standings-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Monte Carlo Panel ── */
+.mc-panel {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.12);
+  border-radius: 20px; overflow: hidden; margin-top: 18px;
+}
+.mc-header { padding: 16px 18px 12px; border-bottom: 1px solid rgba(250,204,21,0.12); }
+.mc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #5b7a64; }
+.mc-sub { font-size: 10px; color: #2d4a36; margin-top: 3px; }
+.mc-body { padding: 16px 18px; }
+.mc-row { margin-bottom: 14px; }
+.mc-row:last-child { margin-bottom: 0; }
+.mc-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.mc-bar-bg { height: 8px; background: #143420; border-radius: 4px; overflow: hidden; }
+.mc-bar-fill { height: 100%; border-radius: 4px; transition: width 1s ease; }
+.mc-pct { font-size: 15px; font-weight: 900; }
+
+/* ── Knockout Bracket ── */
+.ko-rounds { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; }
+.ko-round { min-width: 160px; flex-shrink: 0; }
+.ko-round-title {
+  font-family: 'Oswald', sans-serif; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.5px; color: #facc15;
+  text-align: center; margin-bottom: 8px; padding: 4px 0;
+  border-bottom: 1px solid rgba(250,204,21,0.2);
+}
+.ko-game {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.1);
+  border-radius: 8px; overflow: hidden; margin-bottom: 8px;
+}
+.ko-team {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px; height: 26px; font-size: 11px; font-weight: 600; color: #8aad92;
+  border-bottom: 1px solid #071510; position: relative; overflow: hidden;
+}
+.ko-team:last-child { border-bottom: none; }
+.ko-team.winner { color: #d1fae5; font-weight: 800; }
+.ko-team.loser { opacity: 0.4; }
+.ko-team.live-now { color: #22c55e; }
+.ko-owner-bar { width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
+.ko-score { font-size: 12px; font-weight: 900; flex-shrink: 0; margin-left: 4px; }
+.ko-live-badge {
+  font-size: 8px; font-weight: 800; color: #22c55e; background: rgba(34,197,94,0.15);
+  padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+}
+.ko-tbd { color: #2d4a36; font-style: italic; font-size: 10px; }
+.ko-flag { font-size: 13px; flex-shrink: 0; margin-right: 3px; line-height: 1; }
+.ko-owner-initial {
+  font-size: 9px; font-weight: 900; border: 1px solid; border-radius: 3px;
+  padding: 0 3px; margin-right: 4px; flex-shrink: 0; line-height: 16px;
+}
+.ko-pts-badge {
+  font-size: 9px; font-weight: 900; border: 1px solid; border-radius: 4px;
+  padding: 0 4px; margin-left: auto; flex-shrink: 0; line-height: 16px;
+}
+
+/* Knockout points tracker */
+.ko-tracker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; }
+@media (max-width: 540px) { .ko-tracker { grid-template-columns: repeat(2, 1fr); } }
+.ko-tracker-card {
+  background: #0a1f12;
+  border-radius: 12px; padding: 12px 14px; text-align: center;
+  border: 1px solid rgba(250,204,21,0.1);
+}
+.ko-tracker-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.ko-tracker-pts { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 900; line-height: 1; }
+.ko-tracker-label { font-size: 9px; color: #3f6b4a; margin-top: 3px; }
+.ko-tracker-best { font-size: 9px; color: #4a7a56; margin-top: 6px; }
+.ko-tracker-best strong { font-weight: 800; }
+.ko-tracker-alive { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.ko-alive-count { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 900; }
+.ko-alive-label { font-size: 9px; color: #4a7a56; }
+.ko-tracker-breakdown { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.ko-breakdown-item { font-size: 10px; color: #4a7a56; }
+.ko-breakdown-item strong { font-weight: 800; }
+.ko-breakdown-sep { font-size: 10px; color: #2d4a36; }
+
+/* Footer */
+.footer { text-align: center; color: #2d4a36; font-size: 12px; padding: 24px 0 40px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .page-body { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .schedule-panel { margin-bottom: 24px; }
+}
+@media (max-width: 620px) {
+  .cards-grid { grid-template-columns: 1fr; }
+  .header { flex-direction: column; gap: 12px; align-items: flex-start; }
+  .lb-row { grid-template-columns: 40px 1fr 56px; }
+  .lb-best-col { display: none; }
+}
+@media (max-width: 540px) {
+  html, body { overflow-x: hidden; max-width: 100vw; }
+  .page-body { padding: 16px 12px; grid-template-columns: 1fr; gap: 16px; }
+  .wrap { padding: 0; }
+
+  /* Leaderboard */
+  .lb-row { grid-template-columns: 36px 1fr 56px; padding: 12px 14px; gap: 8px; }
+  .lb-best-col { display: none; }
+  .lb-score { font-size: 24px; }
+  .lb-player-name { font-size: 15px; }
+
+  /* Player cards */
+  .cards-grid { grid-template-columns: 1fr; gap: 14px; }
+  .card-header { padding: 12px 14px 10px; }
+  .card-score { font-size: 34px; }
+  .team-list { grid-template-columns: 1fr; padding: 0 12px 14px; gap: 3px; }
+  .team-name { max-width: none; flex: 1; }
+  .team-item { padding: 5px 6px; }
+
+  /* Sidebar schedule */
+  .schedule-panel { border-radius: 14px; }
+  .game-venue { font-size: 9px; }
+
+  /* Monte Carlo */
+  .mc-body { padding: 12px; }
+
+  /* Power rankings */
+  #power-rankings .pr-bar-wrap { width: 70px; }
+  .pr-name { font-size: 11px; }
+
+  /* Group standings */
+  .standings-grid { grid-template-columns: 1fr; }
+  .group-table { font-size: 10px; }
+  .group-table td, .group-table th { padding: 3px 2px; }
+  .owner-tag { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="header">
+  <div>
+    <h1>⚽ World Cup 2026 Pick'em 🏆</h1>
+    <div class="header-sub">4 players · live scores from ESPN · rosters from Apple Notes</div>
+  </div>
+  <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+</div>
+
+<div class="standings-section" id="knockout-section">
+  <div class="standings-title">📈 Knockout Points Tracker</div>
+  <div id="ko-pts-tracker"></div>
+  <div class="ko-bracket-section">
+    <div class="standings-title" style="margin-top:24px">🏆 Knockout Bracket</div>
+    <div id="knockout-bracket"></div>
+  </div>
+</div>
+
+<div class="standings-section">
+  <div class="standings-title">📅 Next Games</div>
+  <div class="schedule-panel" style="margin-top:8px">
+    <div class="schedule-header">
+      <span class="schedule-title">FIFA World Cup 2026</span>
+      <span class="schedule-badge" id="schedule-badge">ESPN</span>
+    </div>
+    <div id="schedule-body">
+      <div class="schedule-loading">Loading schedule…</div>
+    </div>
+  </div>
+</div>
+
+<div class="page-body">
+
+  <!-- Left: main content -->
+  <div class="main-col">
+    <div class="cards-grid" id="cards"></div>
+    <div class="footer" id="footer"></div>
+  </div>
+
+  <!-- Right: win probability -->
+  <div class="sidebar">
+    <div class="mc-panel">
+      <div class="mc-header">
+        <div class="mc-title">🎲 Win Probability</div>
+        <div class="mc-sub">Monte Carlo · 10,000 sims · weighted by team strength</div>
+      </div>
+      <div class="mc-body" id="mc-body">
+        <div class="schedule-loading">Calculating…</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- end page-body -->
+
+<div class="standings-section">
+  <div class="standings-title">⚽ Group Standings</div>
+  <div class="standings-grid" id="standings-grid">
+    <div style="color:#4a7a56;font-size:12px;padding:12px;">Loading standings…</div>
+  </div>
+</div>
+
+<div class="standings-section">
+  <div class="standings-title">📊 Live Power Rankings <span id="power-meta" style="font-size:11px;font-weight:400;color:#4a7a56;margin-left:8px;"></span></div>
+  <div id="power-rankings"></div>
+</div>
+
+</div><!-- end wrap -->
+
+<script>
+const C = {
+  CARSON: {primary:'#10b981', bg:'rgba(16,185,129,0.15)', border:'rgba(16,185,129,0.2)'},
+  KEITH:  {primary:'#3b82f6', bg:'rgba(59,130,246,0.15)',  border:'rgba(59,130,246,0.2)'},
+  LUKE:   {primary:'#f59e0b', bg:'rgba(245,158,11,0.15)',  border:'rgba(245,158,11,0.2)'},
+  WILL:   {primary:'#8b5cf6', bg:'rgba(139,92,246,0.15)',  border:'rgba(139,92,246,0.2)'},
+};
+const RANK_EMOJI = ['🥇','🥈','🥉','4️⃣'];
+
+const FLAGS = {
+  'argentina':'🇦🇷','australia':'🇦🇺','austria':'🇦🇹','algeria':'🇩🇿',
+  'belgium':'🇧🇪','bosnia':'🇧🇦','brazil':'🇧🇷',
+  'canada':'🇨🇦','cape verde':'🇨🇻','colombia':'🇨🇴','congo dr':'🇨🇩',
+  'croatia':'🇭🇷','czech republic':'🇨🇿','curaçao':'🇨🇼',
+  "cote d'ivoire":"🇨🇮","côte d'ivoire":"🇨🇮","ivory coast":"🇨🇮",
+  'ecuador':'🇪🇨','egypt':'🇪🇬','england':'🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+  'france':'🇫🇷','germany':'🇩🇪','ghana':'🇬🇭',
+  'haiti':'🇭🇹','iran':'🇮🇷','iraq':'🇮🇶',
+  'japan':'🇯🇵','jordan':'🇯🇴',
+  'mexico':'🇲🇽','morocco':'🇲🇦',
+  'netherlands':'🇳🇱','new zealand':'🇳🇿','norway':'🇳🇴',
+  'panama':'🇵🇦','paraguay':'🇵🇾','portugal':'🇵🇹',
+  'qatar':'🇶🇦',
+  'saudi arabia':'🇸🇦','scotland':'🏴󠁧󠁢󠁳󠁣󠁴󠁿','senegal':'🇸🇳',
+  'south africa':'🇿🇦','south korea':'🇰🇷','spain':'🇪🇸','sweden':'🇸🇪',
+  'switzerland':'🇨🇭',
+  'tunisia':'🇹🇳','türkiye':'🇹🇷','turkiye':'🇹🇷',
+  'united states':'🇺🇸','uruguay':'🇺🇾','uzbekistan':'🇺🇿',
+};
+
+function flag(name) {
+  return FLAGS[name.toLowerCase()] || '🏳️';
+}
+
+// All teams owned by any player (for highlighting in schedule)
+let ownedTeams = new Set();
+let teamOwners = {}; // lowercase team name → player name (CARSON/KEITH/LUKE/WILL)
+
+function ptsClass(pts) {
+  if (pts === null || pts === undefined) return 'pts-none';
+  if (pts === 0) return 'pts-zero';
+  if (pts >= 3) return 'pts-high';
+  return 'pts-low';
+}
+
+function gamesPlayedForPlayer(player) {
+  return player.teams.reduce((sum, t) => sum + (t.gp || 0), 0);
+}
+
+function renderLeaderboard(players) {
+  const totalPerPlayer = players[0]?.teams.length * 3 || 36; // 12 teams × 3 group games
+  const html = players.map((p, i) => {
+    const c = C[p.name] || {primary:'#fff'};
+    const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
+    const bestRankText = bestRank === 1 ? 'Can win 🏆' : `Best: #${bestRank}`;
+    const played = gamesPlayedForPlayer(p);
+    const remaining = totalPerPlayer - played;
+    return `
+    <div class="lb-row ${i===0?'first':''}">
+      <div class="lb-rank">${RANK_EMOJI[i] || i+1}</div>
+      <div class="lb-player">
+        <div class="lb-player-name" style="color:${c.primary}">${p.name}</div>
+        <div class="lb-player-sub">
+          <span style="color:${c.primary};font-weight:700">${played}</span>/<span>${totalPerPlayer}</span> games played
+          · <span style="color:#475569">${remaining} left</span>
+        </div>
+      </div>
+      <div class="lb-score" style="color:${c.primary}">${p.total}</div>
+      <div class="lb-best-col">
+        <div class="lb-best-label">Best possible</div>
+        <div class="lb-best-val">${p.best_possible}</div>
+        <span class="best-rank-pill" style="background:${c.bg};color:${c.primary}">${bestRankText}</span>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('leaderboard').innerHTML = html;
+}
+
+/* ── Team game history (group stage pips) ── */
+let teamGameData = {}; // normalized name -> [{result,pts,score,oppScore,oppName,completed,live}]
+
+// Normalize team names to match between ESPN and the Apple Note
+const NAME_OVERRIDES = {
+  'usa': 'united states',
+  'ivory coast': "cote d'ivoire",
+  "cote d'ivoire": "cote d'ivoire",
+  'bosnia and herzegovina': 'bosnia',
+  'bosnia-herzegovina': 'bosnia',
+  'korea republic': 'south korea',
+  'dr congo': 'congo dr',
+  'democratic republic of congo': 'congo dr',
+  'republic of congo': 'congo dr',
+  'turkey': 'turkiye',
+  'cape verde islands': 'cape verde',
+};
+
+function normalizeName(name) {
+  if (!name) return '';
+  const s = name.toLowerCase()
+    .replace(/[éèêë]/g, 'e').replace(/[àâä]/g, 'a')
+    .replace(/[ùûü]/g, 'u').replace(/[ôö]/g, 'o')
+    .replace(/[^a-z0-9\s']/g, '').trim();
+  return NAME_OVERRIDES[s] || s;
+}
+
+async function fetchTeamGameHistory() {
+  // Group stage runs June 11 – July 2, 2026; fetch from start to today
+  const start = new Date('2026-06-11');
+  const today = new Date();
+  const dates = [];
+  for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+    dates.push(d.toISOString().slice(0, 10).replace(/-/g, ''));
+  }
+
+  // Fetch all past days in parallel
+  const allEvents = (await Promise.all(dates.map(async ds => {
+    try {
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${ds}`);
+      const data = await r.json();
+      return data.events || [];
+    } catch(e) { return []; }
+  }))).flat();
+
+  const map = {};
+  for (const event of allEvents) {
+    const comp = event.competitions?.[0];
+    if (!comp) continue;
+    const statusName = comp.status?.type?.name;
+    const isCompleted = statusName === 'STATUS_FINAL' || statusName === 'STATUS_FULL_TIME' || statusName === 'STATUS_FT';
+    const LIVE_S = ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY']; const isLive = LIVE_S.includes(statusName);
+    const competitors = comp.competitors || [];
+    if (competitors.length < 2) continue;
+
+    for (let i = 0; i < 2; i++) {
+      const me = competitors[i];
+      const opp = competitors[1 - i];
+      const key = normalizeName(me.team?.displayName || '');
+      if (!key) continue;
+      if (!map[key]) map[key] = [];
+
+      const myScore = parseInt(me.score);
+      const oppScore = parseInt(opp.score);
+      let result = null, pts = null;
+      if (isCompleted && !isNaN(myScore) && !isNaN(oppScore)) {
+        if (myScore > oppScore)      { result = 'W'; pts = 3; }
+        else if (myScore === oppScore){ result = 'D'; pts = 1; }
+        else                          { result = 'L'; pts = 0; }
+      }
+
+      map[key].push({ result, pts, score: myScore, oppScore, oppName: opp.team?.displayName, completed: isCompleted, live: isLive, date: event.date });
     }
+  }
+  teamGameData = map;
+}
 
-def github_get_cache():
-    """Fetch recipes-cache.json from GitHub. Returns data_dict."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{CACHE_PATH}"
-    req = urllib.request.Request(url, headers=_gh_headers())
-    with urllib.request.urlopen(req, timeout=15) as r:
-        meta = json.loads(r.read())
-    content = base64.b64decode(meta["content"]).decode("utf-8")
-    return json.loads(content)
-
-# ── Google Sheet helpers ───────────────────────────────────────────────────────
-
-def get_sheet_urls():
-    """Read URLs from Google Sheet — checks column B (hyperlinks) then column A."""
-    import csv, io
-    req = urllib.request.Request(GOOGLE_SHEET_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        text = r.read().decode("utf-8", errors="replace")
-    skip = {"search.app", "share.google"}
-    urls = []
-    seen = set()
-    reader = csv.reader(io.StringIO(text))
-    for row in reader:
-        for cell in row[:2]:
-            cell = cell.strip()
-            if cell.startswith("http") and not any(s in cell for s in skip):
-                if cell not in seen:
-                    seen.add(cell)
-                    urls.append(cell)
-    return urls
-
-# ── Recipe fetching ────────────────────────────────────────────────────────────
-
-def _find_schema_recipe(data):
-    if not data:
-        return None
-    if isinstance(data, list):
-        for item in data:
-            found = _find_schema_recipe(item)
-            if found:
-                return found
-    if isinstance(data, dict):
-        if data.get("@type") == "Recipe":
-            return data
-        if "@graph" in data:
-            return _find_schema_recipe(data["@graph"])
-    return None
-
-def _clean(v):
-    if not v:
-        return ""
-    if isinstance(v, list):
-        return [_clean(i) for i in v if _clean(i)]
-    if isinstance(v, dict):
-        return v.get("text") or v.get("name") or ""
-    return re.sub(r"<[^>]+>", "", str(v)).strip()
-
-def _parse_schema(r, url):
-    instructions = []
-    def flatten(arr):
-        for item in arr:
-            if isinstance(item, str):
-                t = re.sub(r"<[^>]+>", "", item).strip()
-                if t: instructions.append(t)
-            elif isinstance(item, dict):
-                if item.get("@type") == "HowToStep":
-                    t = _clean(item.get("text") or item.get("name", ""))
-                    if t: instructions.append(t)
-                elif item.get("@type") == "HowToSection":
-                    if item.get("name"): instructions.append(f'**{item["name"]}**')
-                    flatten(item.get("itemListElement", []))
-    raw = r.get("recipeInstructions", [])
-    if isinstance(raw, list):
-        flatten(raw)
-    elif isinstance(raw, str):
-        instructions.extend([l for l in raw.splitlines() if l.strip()])
-    img = r.get("image", "")
-    if isinstance(img, list):
-        img = img[0].get("url", img[0]) if img else ""
-    elif isinstance(img, dict):
-        img = img.get("url", "")
-    ingr = r.get("recipeIngredient", [])
-    return {
-        "title":        _clean(r.get("name")) or "Untitled Recipe",
-        "description":  _clean(r.get("description")) or "",
-        "ingredients":  [_clean(i) for i in ingr] if isinstance(ingr, list) else [],
-        "instructions": [i for i in instructions if i],
-        "image":        img or "",
-        "url":          url,
-        "source":       "schema",
+function buildPips(teamGames) {
+  // teamGames is the array from the server: [{result,pts,score,opp_score,opp_name,live}]
+  const games = teamGames || [];
+  const TOTAL = 3;
+  const pips = [];
+  for (let i = 0; i < TOTAL; i++) {
+    const g = games[i];
+    if (!g) {
+      pips.push(`<span class="pip pip-empty"></span>`);
+    } else if (g.live) {
+      pips.push(`<span class="pip pip-live" data-tip="🟢 LIVE vs ${g.opp_name}">●</span>`);
+    } else {
+      const cls = g.result === 'W' ? 'pip-win' : g.result === 'D' ? 'pip-draw' : 'pip-loss';
+      const icon = g.result === 'W' ? '✅' : g.result === 'D' ? '🟡' : '❌';
+      const tip = `${icon} ${g.result}  ${g.score}–${g.opp_score} vs ${g.opp_name}  +${g.pts}pt`;
+      pips.push(`<span class="pip ${cls}" data-tip="${tip}">${g.pts}</span>`);
     }
+  }
+  return `<div class="game-pips">${pips.join('')}</div>`;
+}
 
-def fetch_recipe(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+function renderCards(players) {
+  const html = players.map(p => {
+    const c = C[p.name] || {primary:'#fff', bg:'rgba(255,255,255,0.1)', border:'rgba(255,255,255,0.2)'};
+    const pct = p.best_possible > 0 ? Math.round((p.total / p.best_possible) * 100) : 0;
+    const rank = players.findIndex(x => x.name === p.name) + 1;
+    const played = gamesPlayedForPlayer(p);
+    const totalGames = p.teams.length * 3;
+    const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
+    const bestRankText = bestRank === 1 ? '🏆 Can win' : `Best: #${bestRank}`;
+
+    const teamsHtml = p.teams.map(t => {
+      const pts = t.match_pts ?? t.pts ?? null;
+      const display = pts !== null ? pts : '—';
+      const bonus = t.group_bonus > 0 ? `<span class="team-bonus" title="Group ${t.group_position === 1 ? 'winner' : t.group_position === 2 ? '2nd' : '3rd'} bonus">+${t.group_bonus}</span>` : '';
+      const isLive = (t.games || []).some(g => g.live);
+      const liveGame = isLive ? t.games.find(g => g.live) : null;
+      const liveTip = liveGame ? `LIVE vs ${liveGame.opp_name}` : '';
+      return `<div class="team-item ${isLive ? 'team-live' : ''}">
+        <span class="team-name">
+          <span class="team-flag">${flag(t.name)}</span>
+          ${t.name}
+          ${isLive ? `<span class="live-pip" title="${liveTip}"></span>` : ''}
+        </span>
+        <div class="team-right">
+          ${buildPips(t.games)}
+          <span class="team-pts ${ptsClass(pts)}">${display}</span>
+          ${bonus}
+        </div>
+      </div>`;
+    }).join('');
+    return `
+    <div class="player-card">
+      <div class="card-header" style="background:${c.bg};border-bottom-color:${c.border}">
+        <div>
+          <div class="card-name" style="color:${c.primary}">${RANK_EMOJI[rank-1]} ${p.name}</div>
+          <div class="card-meta">
+            <span class="meta-pill" style="background:${c.bg};color:${c.primary}">${played}/${totalGames} games played</span>
+            <span class="meta-pill" style="background:rgba(255,255,255,0.05);color:#64748b">${bestRankText}</span>
+          </div>
+        </div>
+        <div>
+          <div class="card-score" style="color:${c.primary}">${p.total}</div>
+          <div class="card-best" style="color:${c.primary}">best: ${p.best_possible}</div>
+        </div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${pct}%;background:${c.primary}"></div>
+        </div>
+      </div>
+      <div class="team-list">${teamsHtml}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('cards').innerHTML = html;
+}
+
+/* ── Schedule ── */
+function formatGameTime(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+  });
+}
+
+function statusDotClass(statusType) {
+  if (['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(statusType)) return 'dot-live';
+  if (statusType === 'STATUS_SCHEDULED') {
+    const soon = false; // could check if within 1hr
+    return 'dot-scheduled';
+  }
+  return 'dot-scheduled';
+}
+
+async function fetchScheduleDates(dateStrings) {
+  const all = [];
+  for (const ds of dateStrings) {
+    try {
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${ds}`);
+      const data = await r.json();
+      all.push(...(data.events || []));
+    } catch(e) {}
+  }
+  return all;
+}
+
+function getNext4Games(events) {
+  const now = Date.now();
+  // Collect live + upcoming, sort by date
+  const relevant = events
+    .map(e => {
+      const comp = e.competitions?.[0] || {};
+      const statusType = comp.status?.type?.name || '';
+      const date = new Date(e.date).getTime();
+      return { e, comp, statusType, date };
     })
-    with urllib.request.urlopen(req, timeout=15) as r:
-        body = r.read().decode("utf-8", errors="replace")
+    .filter(x => !['STATUS_FINAL','STATUS_FULL_TIME','STATUS_FT'].includes(x.statusType) || x.date > now - 3*60*60*1000)
+    .sort((a, b) => a.date - b.date);
 
-    for block in re.findall(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        body, re.DOTALL | re.IGNORECASE
-    ):
+  // Prefer live games first, then upcoming
+  const live = relevant.filter(x => ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(x.statusType));
+  const upcoming = relevant.filter(x => !['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(x.statusType));
+  return [...live, ...upcoming].slice(0, 4);
+}
+
+function renderSchedule(games) {
+  if (!games.length) {
+    document.getElementById('schedule-body').innerHTML = '<div class="schedule-error">No upcoming games found</div>';
+    return;
+  }
+  const html = games.map(({e, comp, statusType, date}) => {
+    const competitors = comp.competitors || [];
+    const isLive = ['STATUS_IN_PROGRESS','STATUS_HALFTIME','STATUS_FIRST_HALF','STATUS_SECOND_HALF','STATUS_EXTRA_TIME','STATUS_PENALTY'].includes(statusType);
+    const dotClass = isLive ? 'dot-live' : 'dot-scheduled';
+    const timeLabel = isLive
+      ? `LIVE · ${comp.status?.displayClock || ''} ${comp.status?.period ? `· ${comp.status.period}'` : ''}`
+      : formatGameTime(e.date);
+
+    const teamsHtml = competitors.map((c, idx) => {
+      const name = c.team?.displayName || c.team?.name || '?';
+      const score = c.score;
+      const isOwned = ownedTeams.has(name.toLowerCase());
+      const ownerKey = teamOwners[name.toLowerCase()];
+      const ownerTag = ownerKey && C[ownerKey]
+        ? `<span class="owner-tag" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary};border:1px solid ${C[ownerKey].border}">${ownerKey[0]}</span>`
+        : '';
+      return `
+        ${idx === 1 ? '<div class="game-vs">vs</div>' : ''}
+        <div class="game-team">
+          <span class="game-team-name ${isOwned ? 'owned' : ''}">${name}${ownerTag}</span>
+          ${isLive || statusType === 'STATUS_FINAL' ? `<span class="game-score">${score ?? '—'}</span>` : ''}
+        </div>`;
+    }).join('');
+
+    const venue = comp.venue || {};
+    const stadiumName = venue.fullName || '';
+    const city = venue.address?.city || '';
+    const venueLabel = stadiumName ? `${stadiumName}${city ? ' · ' + city : ''}` : (city || '');
+
+    return `
+    <div class="game-item">
+      <div class="game-time">
+        <span class="game-status-dot ${dotClass}"></span>
+        ${timeLabel}
+      </div>
+      <div class="game-teams">${teamsHtml}</div>
+      ${venueLabel ? `<div class="game-venue">📍 ${venueLabel}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  document.getElementById('schedule-body').innerHTML = html;
+}
+
+async function updateSchedule() {
+  try {
+    // Fetch yesterday + today + next 3 days (local time, not UTC — avoids missing
+    // late-night games that flip to "tomorrow" in UTC while still today locally)
+    const now = new Date();
+    const dates = [];
+    for (let i = -1; i < 4; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      const yy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      dates.push(`${yy}${mm}${dd}`);
+    }
+    const events = await fetchScheduleDates(dates);
+    const next4 = getNext4Games(events);
+    renderSchedule(next4);
+  } catch(e) {
+    document.getElementById('schedule-body').innerHTML = '<div class="schedule-error">Could not load schedule</div>';
+  }
+}
+
+function renderMonteCarlo(simProbs, players) {
+  const el = document.getElementById('mc-body');
+  if (!simProbs || !players) { el.innerHTML = '<div class="schedule-error">Not available</div>'; return; }
+  const sorted = [...players]
+    .map(p => ({ name: p.name, prob: simProbs[p.name] ?? 0 }))
+    .sort((a, b) => b.prob - a.prob);
+  el.innerHTML = sorted.map(({ name, prob }) => {
+    const c = C[name] || { primary: '#fff' };
+    return `<div class="mc-row">
+      <div class="mc-label">
+        <span style="color:${c.primary};font-weight:800">${name}</span>
+        <span class="mc-pct" style="color:${c.primary}">${prob.toFixed(1)}%</span>
+      </div>
+      <div class="mc-bar-bg">
+        <div class="mc-bar-fill" style="width:${Math.min(prob,100)}%;background:${c.primary}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderKnockout(koGames, players) {
+  const section = document.getElementById('knockout-section');
+  const bracketEl = document.getElementById('knockout-bracket');
+  const trackerEl = document.getElementById('ko-pts-tracker');
+  if (section) section.style.display = '';
+
+  // ── Points Tracker ──────────────────────────────────────────────
+  // Build set of eliminated teams (lost a completed KO game)
+  const eliminated = new Set();
+  const inBracket = new Set();
+  (koGames || []).forEach(g => {
+    inBracket.add(normalizeName(g.team1));
+    inBracket.add(normalizeName(g.team2));
+    if (g.done && g.winner) {
+      const loser = normalizeName(g.team1) === normalizeName(g.winner) ? normalizeName(g.team2) : normalizeName(g.team1);
+      eliminated.add(loser);
+    }
+  });
+
+  const playerOrder = [...(players || [])].sort((a, b) => (b.total || 0) - (a.total || 0));
+  trackerEl.innerHTML = `<div class="ko-tracker">${playerOrder.map(p => {
+    const name = p.name.toUpperCase();
+    const koPts = p.ko_pts || 0;
+    const total = p.total || 0;
+    const groupPts = total - koPts;
+    const col = C[name] || { primary: '#facc15', bg: 'rgba(250,204,21,0.1)', border: 'rgba(250,204,21,0.2)' };
+    // Count teams still alive in knockout
+    const alive = (p.teams || []).filter(t => {
+      const tn = normalizeName(t.name);
+      return inBracket.has(tn) && !eliminated.has(tn);
+    });
+    const teamsLeft = alive.length;
+    const teamNames = alive.map(t => {
+      const f = FLAGS[normalizeName(t.name)] || '';
+      return `${f} ${t.name}`;
+    }).join(', ');
+    return `<div class="ko-tracker-card" style="border-color:${col.border};background:${col.bg}">
+      <div class="ko-tracker-name" style="color:${col.primary}">${name}</div>
+      <div class="ko-tracker-pts" style="color:${col.primary}">${total}</div>
+      <div class="ko-tracker-label">total pts</div>
+      <div class="ko-tracker-breakdown">
+        <span class="ko-breakdown-item">Group <strong style="color:${col.primary}">${groupPts}</strong></span>
+        <span class="ko-breakdown-sep">+</span>
+        <span class="ko-breakdown-item">KO <strong style="color:${col.primary}">${koPts}</strong></span>
+      </div>
+      <div class="ko-tracker-best">Best possible: <strong style="color:${col.primary}">${p.best_possible ?? '—'}</strong></div>
+      <div class="ko-tracker-alive" title="${teamNames}">
+        <span class="ko-alive-count" style="color:${col.primary}">${teamsLeft}</span>
+        <span class="ko-alive-label"> team${teamsLeft !== 1 ? 's' : ''} left</span>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  if (!koGames || koGames.length === 0) return;
+
+  // ── Bracket ─────────────────────────────────────────────────────
+  // Layout constants — must match .ko-team height in CSS (24px × 2 = 48px game)
+  const GAME_H  = 52;   // px: height of one game card (2 × 26px team rows)
+  const SLOT    = 72;   // px: vertical slot for one R32 game (gap = 72-48=24px)
+  const COL_W   = 168;  // px: column width
+  const CONN    = 32;   // px: connector width between columns
+
+  // Vertical center of bracket position (roundIdx, gameIdx)
+  function center(r, i) { return (i + 0.5) * SLOT * Math.pow(2, r); }
+  function top(r, i)    { return center(r, i) - GAME_H / 2; }
+
+  const TOTAL_H = 16 * SLOT; // 1152px — full bracket height
+
+  // Group games by round
+  const rounds = {};
+  koGames.forEach(g => {
+    const k = g.round_order;
+    if (!rounds[k]) rounds[k] = { name: g.round, order: g.round_order, games: [] };
+    rounds[k].games.push(g);
+  });
+  const allRounds = Object.values(rounds).sort((a, b) => a.order - b.order);
+  const bracketRounds = allRounds.filter(r => r.name !== '3rd Place');
+  const thirdPlace    = allRounds.find(r => r.name === '3rd Place');
+
+  // Points awarded per knockout round win
+  const KO_PTS = { 'Round of 32':4, 'Round of 16':4, 'Quarterfinals':4, 'Semifinals':4, '3rd Place':2, 'Final':8 };
+
+  // Render a single team row
+  function teamRow(name, display, score, winner, loser, live, roundName) {
+    const ok  = name ? (teamOwners[normalizeName(name)] || teamOwners[name.toLowerCase()]) : null;
+    const col = ok && C[ok] ? C[ok] : null;
+    const bar = col ? col.primary : '#1a3322';
+    const cls = live ? 'ko-team live-now' : winner ? 'ko-team winner' : loser ? 'ko-team loser' : 'ko-team';
+    const teamFlag = name ? `<span class="ko-flag">${flag(normalizeName(name))}</span>` : '';
+    const lbl = display || (name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '') || '<span class="ko-tbd">TBD</span>';
+    const sc  = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
+    const lv  = live ? '<span class="ko-live-badge">LIVE</span>' : '';
+    // Owner initial badge (always shown if team is owned)
+    const ownerBadge = col
+      ? `<span class="ko-owner-initial" style="color:${col.primary};border-color:${col.border}">${ok[0]}</span>`
+      : '';
+    // Points badge on win
+    const pts = KO_PTS[roundName] || 4;
+    const ptsBadge = winner && col
+      ? `<span class="ko-pts-badge" style="background:${col.bg};color:${col.primary};border-color:${col.border}">+${pts}</span>`
+      : '';
+    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${ownerBadge}${teamFlag}${lbl}${lv}${sc}${ptsBadge}</div>`;
+  }
+
+  // Render one game card
+  function gameCard(g) {
+    const done = g.done, live = g.live, rn = g.round;
+    const t1w = done && g.score1 > g.score2, t2w = done && g.score2 > g.score1;
+    return `<div class="ko-game">
+      ${teamRow(g.team1, g.team1_display, done||live ? g.score1 : null, t1w, done&&!t1w, live, rn)}
+      ${teamRow(g.team2, g.team2_display, done||live ? g.score2 : null, t2w, done&&!t2w, live, rn)}
+    </div>`;
+  }
+
+  // Render each round column with absolute-positioned games + connector lines
+  const LINE = 'rgba(250,204,21,0.35)';
+  const cols = bracketRounds.map((round, rIdx) => {
+    let inner = '';
+
+    // Game cards
+    round.games.forEach((g, gIdx) => {
+      const t = Math.round(top(rIdx, gIdx));
+      inner += `<div style="position:absolute;top:${t}px;left:0;right:0">${gameCard(g)}</div>`;
+    });
+
+    // Right-side connector lines (bracket shape joining pairs → next round)
+    if (rIdx < bracketRounds.length - 1) {
+      for (let i = 0; i < round.games.length; i += 2) {
+        const c1  = Math.round(center(rIdx, i));
+        const c2  = Math.round(center(rIdx, i + 1));
+        const mid = Math.round((c1 + c2) / 2);
+        const hx  = CONN / 2 - 1;
+        // horizontal stubs out from each game
+        inner += `<div style="position:absolute;left:${COL_W}px;top:${c1}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+        inner += `<div style="position:absolute;left:${COL_W}px;top:${c2}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+        // vertical bar connecting them
+        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${c1}px;width:1px;height:${c2-c1}px;background:${LINE}"></div>`;
+        // center stub leading to next column
+        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${mid}px;width:${hx+1}px;height:1px;background:${LINE}"></div>`;
+      }
+    }
+
+    return `<div style="position:relative;width:${COL_W}px;flex-shrink:0;margin-right:${CONN}px">
+      <div class="ko-round-title" style="margin-bottom:10px">${round.name}</div>
+      <div style="position:relative;height:${TOTAL_H}px">${inner}</div>
+    </div>`;
+  }).join('');
+
+  // 3rd place game (separate, below bracket)
+  const thirdHtml = thirdPlace ? `<div style="margin-top:20px">
+    <div class="ko-round-title">3rd Place</div>
+    <div style="max-width:${COL_W}px">${thirdPlace.games.map(gameCard).join('')}</div>
+  </div>` : '';
+
+  if (bracketEl) bracketEl.innerHTML = `
+    <div style="display:flex;overflow-x:auto;padding:4px 4px 20px;align-items:flex-start;-webkit-overflow-scrolling:touch">${cols}</div>
+    ${thirdHtml}`;
+}
+
+async function updateAll() {
+  try {
+    const [, data] = await Promise.all([
+      updateSchedule(),
+      fetch('/api/data').then(r => r.json()),
+    ]);
+    ownedTeams = new Set();
+    teamOwners = {};
+    data.players.forEach(p => p.teams.forEach(t => {
+      const key = t.name.toLowerCase();
+      ownedTeams.add(key);
+      teamOwners[key] = p.name.toUpperCase();
+    }));
+    renderCards(data.players);
+    renderMonteCarlo(data.sim_probs, data.players);
+    renderPowerRankings(data.live_strengths, data.games_used, data.odds_used);
+    renderStandings(data.group_standings);
+    renderKnockout(data.knockout_games, data.players);
+    const oddsNote = data.odds_used > 0 ? ` · DraftKings odds on ${data.odds_used} games` : '';
+    document.getElementById('footer').textContent = `Scores from ESPN${oddsNote} · Updated: ${data.updated}`;
+  } catch(e) {
+    document.getElementById('footer').textContent = 'Error loading data — retrying…';
+  }
+}
+
+function renderPowerRankings(strengths, gamesUsed, oddsUsed) {
+  const el = document.getElementById('power-rankings');
+  const meta = document.getElementById('power-meta');
+  if (!strengths || !el) return;
+  const parts = [];
+  if (gamesUsed > 0) parts.push(`Elo-adjusted · ${gamesUsed} games played`);
+  if (oddsUsed > 0) parts.push(`DraftKings odds on ${oddsUsed} upcoming games`);
+  if (meta) meta.textContent = parts.length ? parts.join(' · ') : 'Pre-tournament baseline';
+
+  // Sort teams by current live strength, show all teams in the roster
+  const rosterTeams = new Set();
+  Object.values(teamOwners).forEach(() => {});
+  Object.keys(teamOwners).forEach(k => rosterTeams.add(k));
+  // Build list of all teams with a strength rating
+  const entries = Object.entries(strengths)
+    .sort((a, b) => b[1] - a[1]);
+
+  const maxStr = entries[0]?.[1] || 100;
+  const rows = entries.map(([team, val], i) => {
+    const base = TEAM_STRENGTH_JS[team] || 55;
+    const delta = val - base;
+    const deltaStr = delta > 0.05 ? `<span style="color:#22c55e">▲${delta.toFixed(1)}</span>`
+                   : delta < -0.05 ? `<span style="color:#f87171">▼${Math.abs(delta).toFixed(1)}</span>`
+                   : `<span style="color:#4a7a56">—</span>`;
+    const ownerKey = teamOwners[team];
+    const ownerBadge = ownerKey && C[ownerKey]
+      ? `<span class="pr-owner" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary}">${ownerKey[0]}</span>`
+      : '';
+    const barColor = delta > 0.5 ? '#22c55e' : delta < -0.5 ? '#f87171' : '#facc15';
+    const barPct = Math.round(val / maxStr * 100);
+    const displayName = team.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+    return `<div class="pr-row">
+      <div class="pr-rank">${i + 1}</div>
+      <div class="pr-name">${flag(team)} ${displayName}${ownerBadge}</div>
+      <div class="pr-bar-wrap"><div class="pr-bar" style="width:${barPct}%;background:${barColor}"></div></div>
+      <div class="pr-val">${val.toFixed(1)}</div>
+      <div class="pr-delta">${deltaStr}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = rows;
+}
+
+// Baseline strengths for delta display
+const TEAM_STRENGTH_JS = {
+  'argentina':95,'france':94,'spain':92,'england':90,'brazil':90,'portugal':89,
+  'netherlands':87,'germany':86,'belgium':84,'uruguay':81,'croatia':80,'morocco':79,
+  'colombia':78,'switzerland':76,'senegal':76,"cote d'ivoire":74,'mexico':75,
+  'japan':75,'united states':74,'turkiye':72,'austria':71,'ecuador':70,'norway':70,
+  'south korea':70,'canada':68,'algeria':67,'sweden':67,'egypt':66,'ghana':65,
+  'czech republic':65,'tunisia':64,'iran':64,'scotland':64,'australia':68,
+  'paraguay':60,'bosnia':60,'panama':58,'saudi arabia':58,'qatar':56,
+  'south africa':55,'uzbekistan':52,'congo dr':50,'jordan':50,'new zealand':50,
+  'cape verde':48,'iraq':48,'curacao':45,'haiti':44,
+};
+
+function renderStandings(groups) {
+  if (!groups || !groups.length) return;
+  const el = document.getElementById('standings-grid');
+  el.innerHTML = groups.map(g => {
+    const rows = g.entries.map(e => {
+      const adv = e.adv === 'yes' ? 'adv-yes' : e.adv === 'maybe' ? 'adv-maybe' : e.adv === 'no' ? 'adv-no' : '';
+      const owned = ownedTeams.has(e.team.toLowerCase()) ? '<span class="owned-dot">●</span>' : '';
+      const ownerKey = teamOwners[e.team.toLowerCase()];
+      const ownerBadge = ownerKey && C[ownerKey]
+        ? `<span class="owner-tag" style="background:${C[ownerKey].bg};color:${C[ownerKey].primary};border:1px solid ${C[ownerKey].border}">${ownerKey[0]}</span>`
+        : '';
+      const liveDot = e.is_live ? `<span class="grp-live-dot" title="${e.live_score}"></span>` : '';
+      const liveTip = e.is_live ? ` title="LIVE: ${e.live_score}"` : '';
+      return `<tr class="${adv}${e.is_live ? ' grp-live-row' : ''}">
+        <td${liveTip}><div class="team-name-cell">${liveDot}${owned}<span>${e.team}</span>${ownerBadge}</div></td>
+        <td>${e.gp}</td><td>${e.w}</td><td>${e.d}</td><td>${e.l}</td>
+        <td>${e.gd}</td><td class="pts">${e.pts}</td>
+      </tr>`;
+    }).join('');
+    const liveTag = g.has_live ? '<span class="grp-live-badge">LIVE</span>' : '';
+    return `<div class="group-card${g.has_live ? ' group-card-live' : ''}">
+      <div class="group-header">${g.name} ${liveTag}</div>
+      <table class="group-table">
+        <thead><tr>
+          <th>Team</th><th>GP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>PTS</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+}
+
+updateAll();
+setInterval(updateAll, 30000);
+
+// ── Global pip tooltip (fixed position, never clipped by overflow:hidden) ──
+const pipTip = document.getElementById('pip-tooltip');
+document.addEventListener('mouseover', e => {
+  const pip = e.target.closest('[data-tip]');
+  if (!pip) return;
+  pipTip.textContent = pip.dataset.tip;
+  pipTip.style.display = 'block';
+  const r = pip.getBoundingClientRect();
+  const tw = pipTip.offsetWidth, th = pipTip.offsetHeight;
+  const top = r.top - th - 8 > 0 ? r.top - th - 8 : r.bottom + 8;
+  const left = Math.max(6, Math.min(r.left + r.width/2 - tw/2, window.innerWidth - tw - 6));
+  pipTip.style.top = top + 'px';
+  pipTip.style.left = left + 'px';
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.closest('[data-tip]')) pipTip.style.display = 'none';
+});
+</script>
+<div id="pip-tooltip"></div>
+</body>
+</html>"""
+
+
+import urllib.request, concurrent.futures
+from datetime import timedelta
+
+# ── Name normalization ────────────────────────────────────────────────────────
+
+ESPN_NAME_MAP = {
+    'czechia': 'czech republic',
+    'bosnia-herzegovina': 'bosnia',       # with hyphen (stripped before lookup)
+    'bosniaherzegovina': 'bosnia',         # ESPN live format (hyphen stripped by norm)
+    'bosnia and herzegovina': 'bosnia',
+    'ivory coast': "cote d'ivoire",
+    'dr congo': 'congo dr',
+    'democratic republic of congo': 'congo dr',
+    'korea republic': 'south korea',
+    'cape verde islands': 'cape verde',
+    'turkey': 'turkiye',
+    'usa': 'united states',
+}
+
+def norm(name):
+    """Normalize a team name for comparison."""
+    if not name: return ''
+    s = name.lower()
+    for a, b in [('é','e'),('è','e'),('ê','e'),('ë','e'),('à','a'),('â','a'),
+                 ('ä','a'),('ù','u'),('û','u'),('ü','u'),('ô','o'),('ö','o'),('ç','c')]:
+        s = s.replace(a, b)
+    s = re.sub(r"[^\w\s']", '', s).strip()
+    return ESPN_NAME_MAP.get(s, s)
+
+# ── Roster (fixed — cloud deployment has no access to Apple Notes) ────────────
+# Source of truth: Apple Note "World Cup" as of 2026-06-16.
+# If rosters change, update this dict and redeploy.
+
+FIXED_ROSTER = {
+    'CARSON': ['Brazil', 'Portugal', 'United States', 'Switzerland', 'Sweden', 'Ecuador',
+               'Scotland', 'Egypt', 'New Zealand', 'Panama', 'Congo DR', 'Cape Verde'],
+    'KEITH': ['Spain', 'Netherlands', 'Belgium', 'Croatia', 'Morocco', 'South Korea',
+              'Australia', 'Paraguay', 'Tunisia', 'Qatar', 'Jordan', 'South Africa'],
+    'WILL': ['Germany', 'England', 'Japan', 'Uruguay', 'Mexico', 'Senegal',
+             'Algeria', 'Bosnia', 'Iran', 'Ghana', 'Saudi Arabia', 'Curaçao'],
+    'LUKE': ['France', 'Argentina', 'Norway', 'Colombia', 'Türkiye', "Côte d'Ivoire",
+             'Austria', 'Canada', 'Czech Republic', 'Uzbekistan', 'Haiti', 'Iraq'],
+}
+
+def read_note():
+    return ''  # not available in cloud deployment
+
+def strip_html(html):
+    text = re.sub(r'<br\s*/?>', '\n', html, flags=re.I)
+    text = re.sub(r'</div>', '\n', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    return text.replace('&gt;','>').replace('&lt;','<').replace('&amp;','&').replace('&nbsp;',' ')
+
+RULES_KEYWORDS = [
+    'you get a point', '=>', 'win group', 'bonus point', 'bronze winner',
+    'runner up', 'winner =', 'credits ray', 'bernini', 'each win',
+    'advancing to the next', 'group stage', '4 points', '2 points', '1 point',
+    'and the points build',
+]
+
+def parse_note_roster(html):
+    """Extract player → [team name, ...] from the Note. Ignores scores."""
+    text = strip_html(html)
+    players = {}
+    current = None
+    for raw in text.split('\n'):
+        line = raw.strip()
+        if not line: continue
+        if '2022 results' in line.lower(): break
+        m = re.match(r'^(CARSON|KEITH|LUKE|WILL)\b', line, re.I)
+        if m:
+            current = m.group(1).upper()
+            players[current] = []
+            continue
+        if current:
+            if any(kw in line.lower() for kw in RULES_KEYWORDS): continue
+            clean = re.sub(r"[^\w\s'\-\.]", '', line, flags=re.UNICODE).strip()
+            if not clean or len(clean) < 2: continue
+            # Strip trailing score if present (e.g. "Brazil - 3")
+            team_name = re.sub(r'\s*-\s*\d+\s*$', '', clean).strip(' -')
+            if team_name and len(team_name) > 1:
+                players[current].append(team_name)
+    return players
+
+# ── ESPN game data ─────────────────────────────────────────────────────────────
+
+def fetch_espn_url(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.load(r)
+
+def fetch_group_stage_games():
+    """
+    Fetch ALL group-stage games from ESPN for the full window (June 11 – July 2),
+    including games that haven't been played yet (status == scheduled). This is
+    required so that teams which haven't played any games so far are still known
+    to the system (correct group membership + correct remaining fixture list),
+    instead of being invisible to scoring/simulation until their first kickoff.
+    Fetched concurrently across days to keep this fast.
+    """
+    dates = []
+    d = datetime(2026, 6, 11)
+    end = datetime(2026, 7, 3)
+    while d < end:
+        dates.append(d.strftime('%Y%m%d'))
+        d += timedelta(days=1)
+
+    def fetch_day(ds):
+        day_games = []
         try:
-            data = json.loads(block.strip())
-            schema = _find_schema_recipe(data)
-            if schema:
-                recipe = _parse_schema(schema, url)
-                if not recipe["image"]:
-                    m = re.search(r'<meta[^>]*(?:property=["\']og:image["\']|name=["\']twitter:image["\'])[^>]*content=["\'](.*?)["\']', body)
-                    if m: recipe["image"] = m.group(1)
-                return recipe
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
+            data = fetch_espn_url(url)
+            for event in data.get('events', []):
+                slug = event.get('season', {}).get('slug', '')
+                if 'group' not in slug: continue  # skip knockout rounds
+                comp = event['competitions'][0]
+                status = comp['status']['type']['name']
+                is_done = status in ('STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT')
+                is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
+                                     'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
+                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
+                # Note: scheduled (not done, not live) games are kept too —
+                # they're needed to know full group membership & remaining fixtures.
+                cs = comp['competitors']
+                if len(cs) < 2: continue
+                t1, t2 = cs[0], cs[1]
+                s1 = int(t1.get('score') or 0)
+                s2 = int(t2.get('score') or 0)
+                # Extract DraftKings moneyline odds (home=t1, away=t2)
+                ml_home = ml_away = ml_draw = None
+                try:
+                    odds_obj = comp.get('odds', [{}])[0]
+                    ml = odds_obj.get('moneyline', {})
+                    ml_home = ml.get('home', {}).get('close', {}).get('odds')
+                    ml_away = ml.get('away', {}).get('close', {}).get('odds')
+                    ml_draw = ml.get('draw', {}).get('close', {}).get('odds')
+                    if ml_home is not None: ml_home = float(ml_home)
+                    if ml_away is not None: ml_away = float(ml_away)
+                    if ml_draw is not None: ml_draw = float(ml_draw)
+                except Exception:
+                    pass
+                day_games.append({
+                    'team1': norm(t1['team']['displayName']),
+                    'team2': norm(t2['team']['displayName']),
+                    'team1_display': t1['team']['displayName'],
+                    'team2_display': t2['team']['displayName'],
+                    'score1': s1, 'score2': s2,
+                    'done': is_done, 'live': is_live,
+                    'date': event['date'],
+                    'ml_home': ml_home, 'ml_away': ml_away, 'ml_draw': ml_draw,
+                })
         except Exception:
             pass
+        return day_games
 
-    t = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\'](.*?)["\']', body)
-    i = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\'](.*?)["\']', body)
+    games = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        for day_games in ex.map(fetch_day, dates):
+            games.extend(day_games)
+    return games
+
+def build_team_stats(games):
+    """
+    Returns:
+      team_stats: {norm_name: {pts, gp, w, d, l, gf, ga, gd, group_id, group_pos, group_done, games[]}}
+    Groups determined via union-find on opponents.
+    """
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        if parent[x] != x: parent[x] = find(parent[x])
+        return parent[x]
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py: parent[px] = py
+
+    stats = {}
+    def get(t):
+        if t not in stats:
+            stats[t] = {'pts':0,'gp':0,'w':0,'d':0,'l':0,'gf':0,'ga':0,'gd':0,'games':[]}
+        return stats[t]
+
+    for g in games:
+        t1, t2 = g['team1'], g['team2']
+        s1, s2 = g['score1'], g['score2']
+        union(t1, t2)
+        # Always register both teams, even for scheduled (not yet played) games,
+        # so teams with 0 games played so far are still known to the system.
+        get(t1); get(t2)
+        if g['done']:
+            for team, score, opp_score, opp_disp in [
+                (t1, s1, s2, g['team2_display']),
+                (t2, s2, s1, g['team1_display'])
+            ]:
+                st = get(team)
+                st['gp'] += 1
+                st['gf'] += score
+                st['ga'] += opp_score
+                st['gd'] = st['gf'] - st['ga']
+                if score > opp_score:
+                    result, pts = 'W', 3
+                    st['pts'] += 3; st['w'] += 1
+                elif score == opp_score:
+                    result, pts = 'D', 1
+                    st['pts'] += 1; st['d'] += 1
+                else:
+                    result, pts = 'L', 0
+                    st['l'] += 1
+                st['games'].append({
+                    'result': result, 'pts': pts,
+                    'score': score, 'opp_score': opp_score,
+                    'opp_name': opp_disp, 'live': False,
+                })
+        elif g['live']:
+            for team, opp_disp in [(t1, g['team2_display']), (t2, g['team1_display'])]:
+                get(team)['games'].append({'live': True, 'opp_name': opp_disp, 'result': None, 'pts': None})
+
+    # Assign group IDs via union-find roots
+    group_roots = {}
+    ctr = [0]
+    for team in list(stats.keys()):
+        root = find(team)
+        if root not in group_roots:
+            ctr[0] += 1
+            group_roots[root] = ctr[0]
+        stats[team]['group_id'] = group_roots[root]
+
+    # Calculate group positions within each group
+    groups = {}
+    for team, s in stats.items():
+        groups.setdefault(s['group_id'], []).append((team, s))
+
+    for members in groups.values():
+        sorted_m = sorted(members, key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        group_done = all(x[1]['gp'] == 3 for x in members)
+        for pos, (team, s) in enumerate(sorted_m, 1):
+            s['group_pos'] = pos
+            s['group_done'] = group_done
+
+    # ── Wild-card 3rd-place advancement (best 8 third-placed teams) ─────────
+    # Collect all third-place finishers from completed groups.
+    # We award the +1 bonus progressively: a 3rd-place team from a finished group
+    # gets credit as soon as it's mathematically locked into the top 8 (i.e. it
+    # would still be in the top 8 even if all remaining unfinished groups produce
+    # a better third-place team). Once all 12 groups finish we can be exact.
+    all_groups_done = len(groups) > 0 and all(
+        all(s['gp'] == 3 for _, s in members) for members in groups.values()
+    )
+    # Count how many groups are still unfinished (their 3rd-placer is unknown)
+    groups_remaining = sum(
+        1 for members in groups.values()
+        if any(s['gp'] < 3 for _, s in members)
+    )
+
+    third_placers = []
+    for members in groups.values():
+        for team, s in members:
+            if s.get('group_pos') == 3:
+                third_placers.append((team, s))
+                s['advances_wildcard'] = False
+
+    # Sort by pts desc, gd desc, gf desc — same as FIFA tiebreakers
+    third_placers.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+
+    if all_groups_done:
+        # All groups done: exact top 8
+        for team, s in third_placers[:8]:
+            s['advances_wildcard'] = True
+    else:
+        # Partial: a finished-group 3rd placer is safe if even assuming all
+        # remaining groups produce a perfect third-placer (9 pts, high GD)
+        # they would still be in the top 8.
+        BEST_POSSIBLE = {'pts': 9, 'gd': 99, 'gf': 99}
+        hypothetical = third_placers + [
+            (f'__tbd_{i}', BEST_POSSIBLE) for i in range(groups_remaining)
+        ]
+        hypothetical.sort(key=lambda x: (-x[1]['pts'], -x[1]['gd'], -x[1]['gf']))
+        safe_teams = {t for t, _ in hypothetical[:8] if not t.startswith('__tbd')}
+        for team, s in third_placers:
+            if team in safe_teams:
+                s['advances_wildcard'] = True
+
+    return stats
+
+# ── Scoring rules ──────────────────────────────────────────────────────────────
+
+def calculate_scores(roster, team_stats):
+    """
+    Scoring per the rules:
+      Group stage:  3pts win / 1pt draw / 0pts loss
+      Group finish: 1st +4, 2nd +2, 3rd (qualifying wildcard) +1
+      Knockout:     +4 per round won
+      Bronze match: +2 for winner (no +4 for the win)
+      Runner-up:    +2 bonus
+      Champion:     +4 bonus (on top of +4 for winning the final)
+    """
+    # Max knockout points by finishing position (1 team per slot):
+    # Champion: 5 wins×4 + 4 bonus = 24
+    # Runner-up: 4 wins×4 + 2 bonus = 18
+    # Bronze: 3 wins×4 + 2 (bronze, not 4) = 14
+    # SF loser: 3 wins×4 = 12
+    # QF loser: 3 wins×4 = 12  (R32 + R16 + QF... wait: R32+R16+QF = 3 wins × 4 = 12)
+    # R16 loser: 2 wins×4 = 8
+    # R32 loser: 1 win×4 = 4
+    KO_SLOTS = [24, 18, 14, 12, 12, 12, 12, 8, 8, 4, 4, 4]
+
+    result = []
+    for player, teams in roster.items():
+        total = 0
+        team_details = []
+        for team_name in teams:
+            key = norm(team_name)
+            s = team_stats.get(key, {})
+            match_pts = s.get('pts', 0)
+            group_bonus = 0
+            eliminated = False
+            if s.get('group_done'):
+                pos = s.get('group_pos', 99)
+                if pos == 1: group_bonus = 4
+                elif pos == 2: group_bonus = 2
+                elif pos == 3 and s.get('advances_wildcard'): group_bonus = 1
+                elif pos >= 4: eliminated = True
+                elif pos == 3 and not s.get('advances_wildcard'): eliminated = True
+
+            team_total = match_pts + group_bonus
+            total += team_total
+
+            # Group stage ceiling (no knockout yet — applied player-level below)
+            gp = s.get('gp', 0)
+            if s.get('group_done') or eliminated:
+                group_remaining = 0
+                potential_bonus = group_bonus
+            else:
+                group_remaining = max(0, 3 - gp) * 3
+                potential_bonus = 4  # could still win group
+
+            team_details.append({
+                'name': team_name,
+                'match_pts': match_pts,
+                'group_bonus': group_bonus,
+                'total': team_total,
+                'gp': gp,
+                'group_pos': s.get('group_pos'),
+                'group_done': s.get('group_done', False),
+                'games': s.get('games', []),
+                'eliminated': eliminated,
+                '_group_ceiling': team_total + group_remaining + max(0, potential_bonus - group_bonus),
+            })
+
+        # Group ceiling: sum of per-team group-stage ceilings
+        group_ceiling_total = sum(t['_group_ceiling'] for t in team_details)
+
+        # Knockout ceiling: declining slots — only 1 team can be champion, 1 runner-up, etc.
+        # Sort eligible teams (not eliminated) by strength desc to assign best slots first
+        eligible = sorted(
+            [t for t in team_details if not t['eliminated']],
+            key=lambda t: strength(norm(t['name'])),
+            reverse=True
+        )
+        ko_ceiling = sum(KO_SLOTS[i] for i in range(min(len(eligible), len(KO_SLOTS))))
+
+        best_possible = group_ceiling_total + ko_ceiling
+        result.append({
+            'name': player,
+            'total': total,
+            'best_possible': best_possible,
+            'teams': [{k:v for k,v in t.items() if k not in ('_group_ceiling', 'eliminated')} for t in team_details],
+        })
+
+    result.sort(key=lambda x: x['total'], reverse=True)
+    return result
+
+# ── Monte Carlo simulation ────────────────────────────────────────────────────
+
+# Approximate team strength ratings (0-100), based on general squad quality /
+# FIFA-ranking tiers heading into the 2026 tournament. Used to weight simulated
+# match outcomes instead of treating every game as a coin flip.
+TEAM_STRENGTH = {
+    'argentina': 95, 'france': 94, 'spain': 92, 'england': 90, 'brazil': 90,
+    'portugal': 89, 'netherlands': 87, 'germany': 86, 'belgium': 84,
+    'uruguay': 81, 'croatia': 80, 'morocco': 79, 'colombia': 78,
+    'switzerland': 76, 'senegal': 76, "cote d'ivoire": 74, 'mexico': 75,
+    'japan': 75, 'united states': 74, 'turkiye': 72, 'austria': 71,
+    'ecuador': 70, 'norway': 70, 'south korea': 70, 'canada': 68,
+    'algeria': 67, 'sweden': 67, 'egypt': 66, 'ghana': 65,
+    'czech republic': 65, 'tunisia': 64, 'iran': 64, 'scotland': 64,
+    'australia': 68, 'paraguay': 60, 'bosnia': 60, 'panama': 58, 'saudi arabia': 58,
+    'qatar': 56, 'south africa': 55, 'uzbekistan': 52, 'congo dr': 50,
+    'jordan': 50, 'new zealand': 50, 'cape verde': 48, 'iraq': 48,
+    'curacao': 45, 'haiti': 44,
+}
+
+def strength(team):
+    return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
+
+def compute_live_strengths(done_games, scheduled_games=None):
+    """Compute live team strengths in two passes:
+    1. Elo updates from completed games (K=40 group, K=80 knockout).
+    2. Odds-implied adjustment for upcoming knockout games — the market
+       prices in current form far better than Elo alone. Only applied to
+       KO games (not group stage, where weak-opponent deflation is a problem).
+    """
+    import math as _math
+    live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
+    for g in done_games:
+        for t in (g['team1'], g['team2']):
+            if t not in live:
+                live[t] = 55.0
+
+    # Pass 1 — Elo from completed games
+    for g in done_games:
+        t1, t2 = g['team1'], g['team2']
+        r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
+        expected1 = 1 / (1 + 10 ** (-(r1 - r2) * 20 / 400))
+        s1, s2 = g['score1'], g['score2']
+        actual1 = 1.0 if s1 > s2 else (0.5 if s1 == s2 else 0.0)
+        K = 80 if g.get('round_order') else 40
+        delta = K * (actual1 - expected1) / 20
+        live[t1] = max(20.0, min(100.0, r1 + delta))
+        live[t2] = max(20.0, min(100.0, r2 - delta))
+
+    # Pass 2 — Blend in odds-implied strength for upcoming knockout games.
+    # For each KO game with sportsbook odds, derive the implied strength
+    # differential and move both teams toward what the market says.
+    upcoming_ko = [g for g in (scheduled_games or [])
+                   if g.get('round_order') and not g.get('done') and not g.get('live')]
+    for g in upcoming_ko:
+        result = odds_match_probs(g)
+        if not result:
+            continue
+        p1, pd, p2 = result
+        total = p1 + p2
+        if total <= 0:
+            continue
+        p1_ko = p1 / total   # KO win prob for team1 (no draws)
+        p2_ko = p2 / total
+        if not (0.05 < p1_ko < 0.95):
+            continue  # skip extreme lines (avoid log instability)
+        t1, t2 = g['team1'], g['team2']
+        r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
+        avg = (r1 + r2) / 2
+        # Elo inversion: r1 - r2 implied by market
+        implied_diff = 20 * _math.log10(p1_ko / p2_ko)
+        current_diff = r1 - r2
+        # 70% market, 30% Elo — market knows current form better
+        blended_diff = 0.70 * implied_diff + 0.30 * current_diff
+        live[t1] = max(20.0, min(100.0, avg + blended_diff / 2))
+        live[t2] = max(20.0, min(100.0, avg - blended_diff / 2))
+
+    return live
+
+def _ml_to_implied(ml):
+    """American moneyline → raw implied probability (before vig removal)."""
+    if ml is None: return None
+    return (abs(ml) / (abs(ml) + 100)) if ml < 0 else (100 / (ml + 100))
+
+def odds_match_probs(game):
+    """Extract vig-free (p1_win, p_draw, p2_win) from DraftKings moneyline on a game dict.
+    Returns None if odds are missing or malformed."""
+    try:
+        p1r = _ml_to_implied(game['ml_home'])
+        p2r = _ml_to_implied(game['ml_away'])
+        pdr = _ml_to_implied(game['ml_draw'])
+        if None in (p1r, p2r, pdr): return None
+        total = p1r + p2r + pdr  # >1.0 due to vig; normalize to remove it
+        return p1r / total, pdr / total, p2r / total
+    except Exception:
+        return None
+
+def match_probs(t1, t2):
+    """
+    Return (p_t1_win, p_draw, p_t2_win) for a group-stage match,
+    using an Elo-style logistic curve on the strength gap plus a flat draw rate.
+    """
+    diff = (strength(t1) - strength(t2)) * 20      # scale rating gap to elo-like units
+    p1_decisive = 1 / (1 + 10 ** (-diff / 400))
+    draw_rate = 0.24
+    p1 = p1_decisive * (1 - draw_rate)
+    p2 = (1 - p1_decisive) * (1 - draw_rate)
+    return p1, draw_rate, p2
+
+def knockout_win_prob(t1, t2):
+    """P(t1 beats t2) in a knockout match (no draws — eventually decided)."""
+    diff = (strength(t1) - strength(t2)) * 20
+    return 1 / (1 + 10 ** (-diff / 400))
+
+
+def get_remaining_games(done_games, team_stats):
+    """Enumerate all group-stage games not yet played by round-robin within each group."""
+    # Collect already-played pairs (normalized names)
+    played = set()
+    for g in done_games:
+        played.add(frozenset([g['team1'], g['team2']]))
+
+    # Group teams by group_id
+    groups = {}
+    for team, s in team_stats.items():
+        gid = s.get('group_id')
+        if gid is not None:
+            groups.setdefault(gid, []).append(team)
+
+    remaining = []
+    for members in groups.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                pair = frozenset([members[i], members[j]])
+                if pair not in played:
+                    remaining.append((members[i], members[j]))
+    return remaining
+
+
+def run_monte_carlo(roster, team_stats, done_games, n=10000, all_games=None, knockout_games=None):
+    """
+    Simulate n full tournaments (remaining group games + knockout rounds).
+    Group games: outcome weighted by team strength (Elo-style) + flat draw rate.
+    Knockout: weighted by team strength, no draws, +4 pts per round won.
+    Top 2 per group + 8 best 3rd-place teams advance (32 teams total).
+    Returns {player_name: win_probability_pct}.
+    """
+    remaining = get_remaining_games(done_games, team_stats)
+
+    groups = {}
+    for team, s in team_stats.items():
+        gid = s.get('group_id')
+        if gid is not None:
+            groups.setdefault(gid, []).append(team)
+
+    base_pts = {team: s['pts'] for team, s in team_stats.items()}
+    player_teams = {player: [norm(t) for t in teams] for player, teams in roster.items()}
+    win_counts = {p: 0.0 for p in roster}
+
+    # Build live-adjusted strengths: Elo from results + odds-implied from upcoming games
+    scheduled = [g for g in (all_games or []) if not g.get('done') and not g.get('live')]
+    live_str = compute_live_strengths(done_games, scheduled_games=scheduled)
+    def live_match_probs(t1, t2):
+        diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
+        p1d = 1 / (1 + 10 ** (-diff / 400))
+        dr = 0.24
+        return p1d * (1 - dr), dr, (1 - p1d) * (1 - dr)
+    def live_ko_prob(t1, t2):
+        diff = (live_str.get(t1, 55) - live_str.get(t2, 55)) * 20
+        return 1 / (1 + 10 ** (-diff / 400))
+
+    # Build odds lookup from scheduled games: frozenset(t1,t2) → game dict
+    odds_lookup = {}
+    for g in (all_games or []):
+        if not g.get('done') and not g.get('live'):
+            key = frozenset([g['team1'], g['team2']])
+            odds_lookup[key] = g
+
+    odds_used = 0
+    def best_match_probs(t1, t2):
+        nonlocal odds_used
+        g = odds_lookup.get(frozenset([t1, t2]))
+        if g:
+            result = odds_match_probs(g)
+            if result:
+                odds_used += 1
+                return result
+        return live_match_probs(t1, t2)
+
+    # Precompute match probabilities once — sportsbook odds preferred, Elo fallback
+    match_p = {(t1, t2): best_match_probs(t1, t2) for t1, t2 in remaining}
+
+    for _ in range(n):
+        pts = dict(base_pts)
+
+        # ── Simulate remaining group games (quality-weighted) ────────────
+        for t1, t2 in remaining:
+            p1, pd, p2 = match_p[(t1, t2)]
+            r = random.random()
+            if r < p1:
+                pts[t1] = pts.get(t1, 0) + 3
+            elif r < p1 + pd:
+                pts[t1] = pts.get(t1, 0) + 1
+                pts[t2] = pts.get(t2, 0) + 1
+            else:
+                pts[t2] = pts.get(t2, 0) + 3
+
+        # ── Group bonuses + determine who advances ──────────────────────
+        group_bonus = {}
+        advanced = []      # teams in knockout
+        third_place = []   # (team, pts) for wild-card selection
+
+        for members in groups.values():
+            sorted_m = sorted(members, key=lambda t: -pts.get(t, 0))
+            if len(sorted_m) > 0: group_bonus[sorted_m[0]] = 4
+            if len(sorted_m) > 1: group_bonus[sorted_m[1]] = 2
+            advanced.extend(sorted_m[:2])           # top 2 advance directly
+            if len(sorted_m) >= 3:
+                third_place.append((sorted_m[2], pts.get(sorted_m[2], 0)))
+
+        # Best 8 third-place teams also advance (WC 2026 format); only those
+        # 8 get the "+1 for 3rd place" bonus, per the rule "3rd, but you
+        # advance to rd of 32, => 1 point".
+        third_place.sort(key=lambda x: -x[1])
+        wildcards = third_place[:8]
+        for t, _ in wildcards:
+            group_bonus[t] = 1
+        advanced.extend(t for t, _ in wildcards)  # 24 + 8 = 32 teams
+
+        # ── Simulate knockout rounds using actual bracket ────────────────
+        # R32 slots are the actual ESPN matchups (sorted by date = bracket order).
+        # Winners of slots 0&1 meet in R16, winners of 2&3, etc.
+        # Completed games are locked; upcoming ones are simulated.
+        knockout_bonus = {team: 0 for team in advanced}
+        advanced_set = set(advanced)
+
+        # Build the 32-slot bracket from actual R32 games
+        r32 = sorted(
+            [g for g in (knockout_games or []) if g.get('round_order') == 1],
+            key=lambda g: g.get('date', '')
+        )
+
+        def resolve_slot(team_norm):
+            """If team is a known real team that advanced, use it; else pick from pool."""
+            if team_norm in advanced_set:
+                return team_norm
+            # Placeholder — draw a random remaining team (fallback only)
+            return random.choice(list(advanced_set)) if advanced_set else team_norm
+
+        # Simulate or lock each R32 game; result = list of 16 winners in bracket order
+        remaining_advanced = set(advanced)
+        r32_winners = []
+        for g in r32:
+            t1 = resolve_slot(g['team1'])
+            t2 = resolve_slot(g['team2'])
+            if g.get('done') and g.get('winner') and g['winner'] in advanced_set:
+                winner = g['winner']
+                loser = t2 if winner == t1 else t1
+            else:
+                p = live_ko_prob(t1, t2)
+                winner = t1 if random.random() < p else t2
+                loser = t2 if winner == t1 else t1
+            knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+            remaining_advanced.discard(t1)
+            remaining_advanced.discard(t2)
+            r32_winners.append(winner)
+
+        # For any advanced teams not yet seeded into a R32 slot (TBD bracket slots),
+        # randomly inject them in pairs so the bracket stays balanced.
+        leftover = list(remaining_advanced)
+        random.shuffle(leftover)
+        while len(leftover) >= 2:
+            a, b = leftover.pop(), leftover.pop()
+            p = live_ko_prob(a, b)
+            winner = a if random.random() < p else b
+            knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+            r32_winners.append(winner)
+
+        # Simulate R16 → SF → Final following bracket pairing
+        current_round = r32_winners
+        semifinal_losers = []
+        while len(current_round) > 1:
+            next_round = []
+            is_semifinal = len(current_round) == 4
+            is_final     = len(current_round) == 2
+            for i in range(0, len(current_round) - 1, 2):
+                a, b = current_round[i], current_round[i + 1]
+                p_a = live_ko_prob(a, b)
+                winner = a if random.random() < p_a else b
+                loser  = b if winner == a else a
+                if is_semifinal:
+                    semifinal_losers.append(loser)
+                if is_final:
+                    knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4 + 4
+                    knockout_bonus[loser]  = knockout_bonus.get(loser,  0) + 2
+                else:
+                    knockout_bonus[winner] = knockout_bonus.get(winner, 0) + 4
+                next_round.append(winner)
+            if len(current_round) % 2 == 1:
+                next_round.append(current_round[-1])
+            current_round = next_round
+
+        # ── 3rd-place (bronze) match ─────────────────────────────────────
+        if len(semifinal_losers) == 2:
+            a, b = semifinal_losers
+            p_a = live_ko_prob(a, b)
+            bronze_winner = a if random.random() < p_a else b
+            knockout_bonus[bronze_winner] = knockout_bonus.get(bronze_winner, 0) + 2
+
+        # ── Player final scores ─────────────────────────────────────────
+        scores = {
+            player: sum(
+                pts.get(t, 0) + group_bonus.get(t, 0) + knockout_bonus.get(t, 0)
+                for t in teams
+            )
+            for player, teams in player_teams.items()
+        }
+
+        mx = max(scores.values()) if scores else 0
+        winners = [p for p, s in scores.items() if s == mx]
+        for w in winners:
+            win_counts[w] += 1.0 / len(winners)
+
     return {
-        "title": t.group(1) if t else url, "description": "", "ingredients": [],
-        "instructions": [], "image": i.group(1) if i else "", "url": url, "source": "scrape"
+        'probs': {p: round(win_counts[p] / n * 100, 1) for p in win_counts},
+        'live_strengths': {t: round(v, 1) for t, v in live_str.items()},
+        'games_used': len(done_games),
+        'odds_used': odds_used,
     }
 
-# ── Startup loader ────────────────────────────────────────────────────────────
 
-def load_recipes():
-    """Load seed recipes from GitHub (read-only). Returns list for /api/recipes."""
-    global _recipes_mem
-    with _cache_lock:
-        if _recipes_mem is not None:
-            return list(_recipes_mem.values())
+# ── Group standings (from ESPN standings endpoint) ────────────────────────────
+
+def fetch_group_standings(live_games=None):
+    """
+    Fetch live group standings for all 12 WC 2026 groups from ESPN.
+    Overlays any in-progress game scores on top of the official standings
+    so the table reflects the current live score, not just completed results.
+    Returns a list of groups, each with name and sorted entries.
+    """
     try:
-        data = github_get_cache()
-        recipes = {}
-        for url, r in (data.get("recipes") or {}).items():
-            if r.get("source") != "error":
-                recipes[url] = {**r, "url": url}
-        for r in (data.get("manualRecipes") or []):
-            key = r.get("url") or r.get("title", "")
-            recipes[key] = {**r, "isManual": True, "source": "manual"}
-        with _cache_lock:
-            _recipes_mem = recipes
-        print(f"Loaded {len(recipes)} seed recipes from GitHub")
-    except Exception as e:
-        print(f"Could not load from GitHub: {e}")
-        with _cache_lock:
-            _recipes_mem = {}
+        url = 'https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings'
+        data = fetch_espn_url(url)
 
-    # Kick off Sheet sync in background so new recipes appear after startup
-    if GOOGLE_SHEET_URL:
-        threading.Thread(target=_background_sheet_sync, daemon=True).start()
+        # Build provisional live adjustments: {norm_team: {pts_delta, gd_delta, is_live, score, opp_score, opp_name}}
+        live_adj = {}
+        for g in (live_games or []):
+            if not g.get('live'): continue
+            s1, s2 = g['score1'], g['score2']
+            t1, t2 = g['team1'], g['team2']
+            # Points delta for each team based on current score
+            if s1 > s2:   p1, p2 = 3, 0
+            elif s1 == s2: p1, p2 = 1, 1
+            else:          p1, p2 = 0, 3
+            live_adj[t1] = {'pts': p1, 'gd': s1 - s2, 'is_live': True,
+                            'score': s1, 'opp_score': s2, 'opp': g['team2_display']}
+            live_adj[t2] = {'pts': p2, 'gd': s2 - s1, 'is_live': True,
+                            'score': s2, 'opp_score': s1, 'opp': g['team1_display']}
+        groups = []
+        for child in data.get('children', []):
+            name = child.get('name', '')          # e.g. "Group A"
+            entries = []
+            for e in child.get('standings', {}).get('entries', []):
+                stats = {s['abbreviation']: s['displayValue'] for s in e.get('stats', [])}
+                note = e.get('note', {}).get('description', '')
+                if 'advance' in note.lower() and 'best' not in note.lower():
+                    adv = 'yes'
+                elif 'best' in note.lower():
+                    adv = 'maybe'
+                elif 'eliminat' in note.lower():
+                    adv = 'no'
+                else:
+                    adv = ''
+                team_disp = e['team']['displayName']
+                team_key  = norm(team_disp)
+                adj = live_adj.get(team_key, {})
+                base_pts = int(stats.get('P',  '0'))
+                base_gd  = int((stats.get('GD','0') or '0').replace('+',''))
+                live_pts = base_pts + adj.get('pts', 0)
+                live_gd  = base_gd  + adj.get('gd',  0)
+                entries.append({
+                    'team':    team_disp,
+                    'gp':      stats.get('GP', '0'),
+                    'w':       stats.get('W',  '0'),
+                    'd':       stats.get('D',  '0'),
+                    'l':       stats.get('L',  '0'),
+                    'gf':      stats.get('F',  '0'),
+                    'ga':      stats.get('A',  '0'),
+                    'gd':      ('+' if live_gd > 0 else '') + str(live_gd),
+                    'pts':     str(live_pts),
+                    'rank':    stats.get('R',  '99'),
+                    'adv':     adv,
+                    'is_live': adj.get('is_live', False),
+                    'live_score': f"{adj['score']}–{adj['opp_score']} vs {adj['opp']}" if adj.get('is_live') else '',
+                })
+            # Re-sort by live pts + gd (not ESPN's pre-game rank) so table reflects current score
+            entries.sort(key=lambda x: (-int(x['pts']), -int((x['gd'] or '0').replace('+',''))))
+            has_live = any(e['is_live'] for e in entries)
+            groups.append({'name': name, 'entries': entries, 'has_live': has_live})
 
-    with _cache_lock:
-        return list(_recipes_mem.values())
+        # ── Correct the yellow "wildcard" highlighting ───────────────────────
+        # ESPN marks ALL current 3rd-place teams as "Best 8 advance", but only
+        # the top 8 of the 12 third-place teams actually advance. Collect all
+        # 3rd-place teams, rank them by pts then GD, and only keep top 8 yellow.
+        def gd_sort_key(gd_str):
+            try: return int(gd_str.replace('+', ''))
+            except: return 0
 
-def _background_sheet_sync():
-    """On startup, silently fetch any Sheet URLs not already in memory."""
-    global _recipes_mem
-    try:
-        sheet_urls = get_sheet_urls()
-        with _cache_lock:
-            existing = set(_recipes_mem.keys())
-        new_urls = [u for u in sheet_urls if u not in existing]
-        if not new_urls:
-            print("Startup sync: no new Sheet URLs to fetch")
-            return
-        print(f"Startup sync: fetching {len(new_urls)} new Sheet URLs")
-        fetched = 0
-        for url in new_urls:
-            try:
-                recipe = fetch_recipe(url)
-                with _cache_lock:
-                    _recipes_mem[url] = {**recipe, "url": url}
-                fetched += 1
-                print(f"Startup fetched: {recipe.get('title','?')}")
-            except Exception as e:
-                print(f"Startup fetch failed {url}: {e}")
-        print(f"Startup sync done: +{fetched} recipes")
-    except Exception as e:
-        print(f"Startup sheet sync error: {e}")
+        third_place = []
+        for g in groups:
+            for e in g['entries']:
+                if int(e.get('rank', 99)) == 3:
+                    third_place.append(e)
+                    e['adv'] = 'no'  # reset all to 'no' first
 
-# ── Sync logic (button-triggered) ─────────────────────────────────────────────
+        third_place.sort(key=lambda e: (-int(e.get('pts', 0)), -gd_sort_key(e.get('gd', '0'))))
+        for e in third_place[:8]:
+            e['adv'] = 'maybe'
 
-def do_sync():
-    """Fetch any new Sheet URLs not already in memory. No GitHub writes."""
-    global _syncing, _recipes_mem
-    if _syncing:
-        return {"status": "already_syncing"}
-    if not GOOGLE_SHEET_URL:
-        return {"status": "error", "message": "GOOGLE_SHEET_URL not set"}
-    _syncing = True
-    try:
-        sheet_urls = get_sheet_urls()
-        with _cache_lock:
-            existing = set(_recipes_mem.keys() if _recipes_mem else [])
-        new_urls = [u for u in sheet_urls if u not in existing]
+        return groups
+    except Exception:
+        return []
 
-        fetched, failed = 0, 0
-        for url in new_urls:
-            try:
-                print(f"Fetching: {url}")
-                recipe = fetch_recipe(url)
-                with _cache_lock:
-                    _recipes_mem[url] = {**recipe, "url": url}
-                fetched += 1
-                print(f"OK: {recipe.get('title','?')}")
-            except Exception as e:
-                print(f"FAILED {url}: {e}")
-                failed += 1
+# ── Knockout stage games ──────────────────────────────────────────────────────
 
-        total = len(_recipes_mem) if _recipes_mem else 0
-        return {"status": "done", "new": len(new_urls), "fetched": fetched, "failed": failed, "total": total}
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return {"status": "error", "message": str(e)}
-    finally:
-        _syncing = False
+# ESPN slug → human-readable round name + sort order
+KNOCKOUT_ROUND_MAP = {
+    'round-of-32':   ('Round of 32', 1),   # WC2026 new round: 48→32
+    'round-of-16':   ('Round of 16', 2),   # 32→16
+    'quarterfinals': ('Quarterfinals', 3),
+    'semifinals':    ('Semifinals', 4),
+    'third-place':   ('3rd Place',   5),
+    'final':         ('Final',       6),
+}
 
-# ── HTML ──────────────────────────────────────────────────────────────────────
+def fetch_knockout_games():
+    """Fetch all knockout-stage games from ESPN (June 28 – July 20)."""
+    dates = []
+    d = datetime(2026, 6, 28)
+    end = datetime(2026, 7, 21)
+    while d < end:
+        dates.append(d.strftime('%Y%m%d'))
+        d += timedelta(days=1)
 
-HTML = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <title>Mamacita's Recipes</title>\n  <style>\n    * { box-sizing: border-box; margin: 0; padding: 0; }\n\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\n      background: #eef4fb;\n      color: #1a2a3a;\n      min-height: 100vh;\n    }\n\n    /* ── Header ── */\n    .header {\n      background: #fff;\n      border-bottom: 1px solid #cde0f5;\n      padding: 14px 28px;\n      position: sticky;\n      top: 0;\n      z-index: 100;\n    }\n\n    .header-top {\n      display: flex;\n      align-items: center;\n      gap: 16px;\n      margin-bottom: 10px;\n    }\n\n    .branding { line-height: 1.15; }\n\n    .branding h1 {\n      font-size: 20px;\n      font-weight: 800;\n      color: #0d3b6e;\n      letter-spacing: -0.4px;\n    }\n\n    .branding .sub {\n      font-size: 11px;\n      font-weight: 600;\n      letter-spacing: 1.2px;\n      text-transform: uppercase;\n      color: #4a90d9;\n    }\n\n    .header-controls {\n      display: flex;\n      align-items: center;\n      gap: 10px;\n      flex: 1;\n    }\n\n    .search-wrap {\n      flex: 1;\n      position: relative;\n      max-width: 480px;\n    }\n\n    .search-wrap svg {\n      position: absolute;\n      left: 13px;\n      top: 50%;\n      transform: translateY(-50%);\n      color: #7aaad4;\n      pointer-events: none;\n    }\n\n    #search {\n      width: 100%;\n      padding: 10px 14px 10px 40px;\n      border: 1.5px solid #c5daf0;\n      border-radius: 10px;\n      font-size: 14px;\n      background: #f4f8fd;\n      outline: none;\n      transition: border-color 0.15s, background 0.15s;\n      color: #1a2a3a;\n    }\n\n    #search:focus { border-color: #1a6fba; background: #fff; }\n    #search::placeholder { color: #9ab8d8; }\n\n    .filter-wrap {\n      position: relative;\n    }\n\n    .filter-wrap svg {\n      position: absolute;\n      left: 11px;\n      top: 50%;\n      transform: translateY(-50%);\n      color: #f0a500;\n      pointer-events: none;\n    }\n\n    #ratingFilter {\n      padding: 10px 14px 10px 32px;\n      border: 1.5px solid #c5daf0;\n      border-radius: 10px;\n      font-size: 13px;\n      font-weight: 500;\n      background: #f4f8fd;\n      color: #1a2a3a;\n      outline: none;\n      cursor: pointer;\n      transition: border-color 0.15s;\n      appearance: none;\n      -webkit-appearance: none;\n      pr: 28px;\n    }\n\n    #ratingFilter:focus { border-color: #1a6fba; }\n\n    .sync-btn {\n      display: flex;\n      align-items: center;\n      gap: 7px;\n      padding: 9px 15px;\n      border: 1.5px solid #c5daf0;\n      border-radius: 9px;\n      background: #fff;\n      font-size: 13px;\n      font-weight: 600;\n      color: #1a6fba;\n      cursor: pointer;\n      white-space: nowrap;\n      transition: all 0.15s;\n    }\n\n    .sync-btn:hover { border-color: #1a6fba; background: #eef4fb; }\n    .sync-btn.syncing { opacity: 0.6; pointer-events: none; }\n    .sync-btn.syncing .sync-icon { animation: spin 1s linear infinite; }\n\n    @keyframes spin { to { transform: rotate(360deg); } }\n\n    /* ── Add Recipe row ── */\n    .add-row {\n      display: flex;\n      align-items: center;\n      gap: 8px;\n      padding: 8px 0 0;\n      border-top: 1px solid #eef4fb;\n    }\n\n    .add-url-input {\n      flex: 1;\n      padding: 8px 13px;\n      border: 1.5px solid #c5daf0;\n      border-radius: 9px;\n      font-size: 13px;\n      background: #f4f8fd;\n      color: #1a2a3a;\n      outline: none;\n      transition: border-color 0.15s;\n    }\n\n    .add-url-input:focus { border-color: #1a6fba; background: #fff; }\n    .add-url-input::placeholder { color: #9ab8d8; }\n\n    .add-btn {\n      padding: 8px 16px;\n      background: #1a6fba;\n      color: #fff;\n      border: none;\n      border-radius: 9px;\n      font-size: 13px;\n      font-weight: 600;\n      cursor: pointer;\n      white-space: nowrap;\n      transition: background 0.15s;\n    }\n\n    .add-btn:hover { background: #0d5099; }\n    .add-btn:disabled { opacity: 0.55; cursor: default; }\n\n    .add-status {\n      font-size: 12px;\n      font-weight: 600;\n      white-space: nowrap;\n      min-width: 120px;\n    }\n\n    .add-status.ok { color: #27ae60; }\n    .add-status.err { color: #c0392b; }\n    .add-status.exists { color: #f0a500; }\n\n    /* ── Stats bar ── */\n    .stats {\n      padding: 8px 28px;\n      font-size: 12px;\n      color: #6a8fad;\n      display: flex;\n      gap: 12px;\n      align-items: center;\n    }\n\n    .stats .dot { width: 6px; height: 6px; border-radius: 50%; background: #4caf50; display: inline-block; }\n\n    /* ── Grid ── */\n    .grid {\n      display: grid;\n      grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));\n      gap: 18px;\n      padding: 18px 28px 48px;\n    }\n\n    .card {\n      background: #fff;\n      border: 1px solid #d5e8f5;\n      border-radius: 14px;\n      overflow: hidden;\n      cursor: pointer;\n      transition: box-shadow 0.15s, transform 0.15s;\n      display: flex;\n      flex-direction: column;\n    }\n\n    .card:hover {\n      box-shadow: 0 6px 24px rgba(26, 111, 186, 0.13);\n      transform: translateY(-2px);\n    }\n\n    .card-img {\n      width: 100%;\n      height: 155px;\n      background: #deeaf8;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      font-size: 36px;\n      overflow: hidden;\n      flex-shrink: 0;\n      position: relative;\n    }\n\n    .card-img img {\n      width: 100%;\n      height: 100%;\n      object-fit: cover;\n      display: block;\n    }\n\n    .card-body {\n      padding: 13px 14px 10px;\n      flex: 1;\n      display: flex;\n      flex-direction: column;\n      gap: 6px;\n    }\n\n    .card-title {\n      font-size: 14px;\n      font-weight: 600;\n      line-height: 1.35;\n      color: #0d3b6e;\n      display: -webkit-box;\n      -webkit-line-clamp: 2;\n      -webkit-box-orient: vertical;\n      overflow: hidden;\n    }\n\n    .card-meta {\n      font-size: 11px;\n      color: #7aaad4;\n      display: flex;\n      gap: 7px;\n      flex-wrap: wrap;\n    }\n\n    .card-meta .tag {\n      background: #eef4fb;\n      padding: 2px 8px;\n      border-radius: 20px;\n      color: #4a80b0;\n    }\n\n    .card-meta .tag.manual { background: #fff8e1; color: #b07d00; }\n    .card-meta .tag.error { background: #fdeaea; color: #c0392b; }\n\n    /* ── Rating row on card ── */\n    .card-rating {\n      display: flex;\n      align-items: center;\n      gap: 6px;\n      padding: 8px 14px 12px;\n      border-top: 1px solid #edf4fb;\n      flex-shrink: 0;\n    }\n\n    .rating-label {\n      font-size: 11px;\n      color: #9ab8d8;\n      font-weight: 500;\n      width: 30px;\n      flex-shrink: 0;\n    }\n\n    .rating-dots {\n      display: flex;\n      gap: 3px;\n    }\n\n    .rating-dot {\n      width: 18px;\n      height: 18px;\n      border-radius: 50%;\n      border: 1.5px solid #c5daf0;\n      background: #f4f8fd;\n      cursor: pointer;\n      font-size: 9px;\n      font-weight: 700;\n      color: #9ab8d8;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      transition: all 0.1s;\n      flex-shrink: 0;\n    }\n\n    .rating-dot:hover,\n    .rating-dot.active {\n      background: #1a6fba;\n      border-color: #1a6fba;\n      color: #fff;\n    }\n\n    .rating-dot.active { box-shadow: 0 0 0 2px #a8cff0; }\n\n    .rating-score {\n      font-size: 12px;\n      font-weight: 700;\n      color: #1a6fba;\n      margin-left: 4px;\n    }\n\n    .empty {\n      grid-column: 1/-1;\n      text-align: center;\n      padding: 60px 20px;\n      color: #9ab8d8;\n    }\n\n    /* ── Modal ── */\n    .overlay {\n      display: none;\n      position: fixed;\n      inset: 0;\n      background: rgba(10, 30, 60, 0.5);\n      z-index: 200;\n      align-items: flex-start;\n      justify-content: center;\n      padding: 32px 16px;\n      overflow-y: auto;\n    }\n\n    .overlay.open { display: flex; }\n\n    .modal {\n      background: #fff;\n      border-radius: 18px;\n      width: 100%;\n      max-width: 740px;\n      overflow: hidden;\n      position: relative;\n      margin: auto;\n    }\n\n    .modal-hero {\n      width: 100%;\n      height: 250px;\n      background: #deeaf8;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      font-size: 64px;\n      overflow: hidden;\n    }\n\n    .modal-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }\n\n    .modal-close {\n      position: absolute;\n      top: 14px;\n      right: 14px;\n      width: 34px;\n      height: 34px;\n      border-radius: 50%;\n      background: rgba(10,30,60,0.45);\n      border: none;\n      color: #fff;\n      font-size: 17px;\n      cursor: pointer;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n    }\n\n    .modal-body { padding: 26px 30px 40px; }\n\n    .modal-header-row {\n      display: flex;\n      align-items: flex-start;\n      justify-content: space-between;\n      gap: 16px;\n      margin-bottom: 6px;\n    }\n\n    .modal-title {\n      font-size: 24px;\n      font-weight: 800;\n      line-height: 1.25;\n      color: #0d3b6e;\n      letter-spacing: -0.3px;\n    }\n\n    .modal-rating-badge {\n      flex-shrink: 0;\n      background: #eef4fb;\n      border: 1.5px solid #c5daf0;\n      border-radius: 10px;\n      padding: 6px 12px;\n      text-align: center;\n      min-width: 56px;\n    }\n\n    .modal-rating-badge .badge-num {\n      font-size: 22px;\n      font-weight: 800;\n      color: #1a6fba;\n      line-height: 1;\n    }\n\n    .modal-rating-badge .badge-label {\n      font-size: 9px;\n      color: #9ab8d8;\n      font-weight: 600;\n      letter-spacing: 0.5px;\n      text-transform: uppercase;\n    }\n\n    .modal-rating-badge.unrated .badge-num { color: #c5daf0; font-size: 13px; font-weight: 500; }\n\n    .modal-source {\n      font-size: 12px;\n      color: #9ab8d8;\n      margin-bottom: 18px;\n    }\n\n    .modal-source a { color: #1a6fba; text-decoration: none; }\n    .modal-source a:hover { text-decoration: underline; }\n\n    .modal-description {\n      font-size: 14px;\n      color: #4a6a8a;\n      line-height: 1.65;\n      margin-bottom: 24px;\n    }\n\n    /* Modal rating row */\n    .modal-rate-row {\n      display: flex;\n      align-items: center;\n      gap: 10px;\n      margin-bottom: 24px;\n      padding: 12px 16px;\n      background: #f4f8fd;\n      border-radius: 10px;\n      border: 1px solid #dceaf8;\n    }\n\n    .modal-rate-row .rate-label {\n      font-size: 12px;\n      font-weight: 600;\n      color: #4a80b0;\n      white-space: nowrap;\n    }\n\n    .modal-rate-dots {\n      display: flex;\n      gap: 4px;\n      flex-wrap: wrap;\n    }\n\n    .modal-rate-dot {\n      width: 28px;\n      height: 28px;\n      border-radius: 50%;\n      border: 1.5px solid #c5daf0;\n      background: #fff;\n      cursor: pointer;\n      font-size: 11px;\n      font-weight: 700;\n      color: #7aaad4;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      transition: all 0.12s;\n    }\n\n    .modal-rate-dot:hover { background: #deeaf8; border-color: #1a6fba; color: #1a6fba; }\n    .modal-rate-dot.active { background: #1a6fba; border-color: #1a6fba; color: #fff; box-shadow: 0 0 0 3px #a8cff0; }\n\n    .modal-columns {\n      display: grid;\n      grid-template-columns: 1fr 1.6fr;\n      gap: 30px;\n    }\n\n    @media (max-width: 600px) { .modal-columns { grid-template-columns: 1fr; } }\n\n    .section-label {\n      font-size: 10px;\n      font-weight: 700;\n      letter-spacing: 1px;\n      text-transform: uppercase;\n      color: #7aaad4;\n      margin-bottom: 12px;\n    }\n\n    .ingredients-list {\n      list-style: none;\n      display: flex;\n      flex-direction: column;\n      gap: 7px;\n    }\n\n    .ingredients-list li {\n      font-size: 13px;\n      line-height: 1.5;\n      padding-left: 14px;\n      position: relative;\n      color: #2a3f5a;\n    }\n\n    .ingredients-list li::before {\n      content: '';\n      position: absolute;\n      left: 0;\n      top: 7px;\n      width: 5px;\n      height: 5px;\n      border-radius: 50%;\n      background: #1a6fba;\n    }\n\n    .ingredients-list li.section-header {\n      font-size: 10px;\n      font-weight: 700;\n      letter-spacing: 0.8px;\n      text-transform: uppercase;\n      color: #7aaad4;\n      padding-left: 0;\n      margin-top: 10px;\n    }\n    .ingredients-list li.section-header::before { display: none; }\n\n    .instructions-list {\n      list-style: none;\n      display: flex;\n      flex-direction: column;\n      gap: 14px;\n    }\n\n    .instructions-list li {\n      font-size: 13px;\n      line-height: 1.65;\n      padding-left: 36px;\n      position: relative;\n      color: #2a3f5a;\n    }\n\n    .instructions-list li::before {\n      content: attr(data-n);\n      position: absolute;\n      left: 0;\n      top: 0;\n      width: 24px;\n      height: 24px;\n      border-radius: 50%;\n      background: #1a6fba;\n      color: #fff;\n      font-size: 11px;\n      font-weight: 700;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n    }\n\n    .step-section {\n      font-size: 10px;\n      font-weight: 700;\n      text-transform: uppercase;\n      letter-spacing: 0.8px;\n      color: #7aaad4;\n      padding-left: 0 !important;\n      margin-top: 8px;\n    }\n\n    .step-section::before { display: none !important; }\n    .no-content { font-size: 13px; color: #b0c8e0; font-style: italic; }\n  </style>\n</head>\n<body>\n\n  <div class=\"header\">\n    <div class=\"header-top\">\n      <div class=\"branding\">\n        <h1>Mamacita's Recipes</h1>\n        <div class=\"sub\">Arditti Kitchen</div>\n      </div>\n    </div>\n    <div class=\"header-controls\">\n      <div class=\"search-wrap\">\n        <svg width=\"15\" height=\"15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\">\n          <circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.35-4.35\"/>\n        </svg>\n        <input id=\"search\" type=\"text\" placeholder=\"Search recipes, ingredients...\" autocomplete=\"off\" />\n      </div>\n      <div class=\"filter-wrap\">\n        <svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"currentColor\">\n          <path d=\"M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z\"/>\n        </svg>\n        <select id=\"ratingFilter\" onchange=\"applyFilters()\">\n          <option value=\"0\">All ratings</option>\n          <option value=\"1\">&#x2605; 1+</option>\n          <option value=\"2\">&#x2605; 2+</option>\n          <option value=\"3\">&#x2605; 3+</option>\n          <option value=\"4\">&#x2605; 4+</option>\n          <option value=\"5\">&#x2605; 5+</option>\n          <option value=\"6\">&#x2605; 6+</option>\n          <option value=\"7\">&#x2605; 7+</option>\n          <option value=\"8\">&#x2605; 8+</option>\n          <option value=\"9\">&#x2605; 9+</option>\n          <option value=\"10\">&#x2605; 10</option>\n        </select>\n      </div>\n      <div class=\"filter-wrap\">\n        <svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" style=\"color:#4a90d9\">\n          <path d=\"M18 8h1a4 4 0 0 1 0 8h-1\"/><path d=\"M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z\"/><line x1=\"6\" y1=\"1\" x2=\"6\" y2=\"4\"/><line x1=\"10\" y1=\"1\" x2=\"10\" y2=\"4\"/><line x1=\"14\" y1=\"1\" x2=\"14\" y2=\"4\"/>\n        </svg>\n        <select id=\"proteinFilter\" onchange=\"applyFilters()\">\n          <option value=\"\">All proteins</option>\n          <option value=\"chicken\">&#x1F413; Chicken</option>\n          <option value=\"turkey\">&#x1F983; Turkey</option>\n          <option value=\"beef\">&#x1F969; Beef</option>\n          <option value=\"salmon\">&#x1F41F; Salmon / Fish</option>\n          <option value=\"shrimp\">&#x1F364; Shrimp</option>\n          <option value=\"tofu\">&#x1FAD8; Tofu</option>\n          <option value=\"chickpea\">&#x1FAD8; Chickpeas / Beans</option>\n          <option value=\"vegetarian\">&#x1F966; Vegetarian</option>\n        </select>\n      </div>\n      <button class=\"sync-btn\" id=\"syncBtn\" onclick=\"syncNow()\">\n        <svg class=\"sync-icon\" width=\"13\" height=\"13\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" viewBox=\"0 0 24 24\">\n          <path d=\"M23 4v6h-6M1 20v-6h6\"/><path d=\"M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15\"/>\n        </svg>\n        <span>Sync Recipes</span>\n      </button>\n    </div>\n    <div class=\"add-row\">\n      <input class=\"add-url-input\" id=\"addUrl\" type=\"url\" placeholder=\"Paste a recipe URL to add it...\" autocomplete=\"off\" onkeydown=\"if(event.key==='Enter')addRecipe()\" />\n      <button class=\"add-btn\" id=\"addBtn\" onclick=\"addRecipe()\">Add Recipe</button>\n      <span class=\"add-status\" id=\"addStatus\"></span>\n    </div>\n  </div>\n\n  <div class=\"stats\" id=\"stats\">Loading recipes&#x2026;</div>\n  <div class=\"grid\" id=\"grid\"></div>\n\n  <!-- Modal -->\n  <div class=\"overlay\" id=\"overlay\" onclick=\"closeModal(event)\">\n    <div class=\"modal\" id=\"modal\">\n      <div class=\"modal-hero\" id=\"modalHero\">&#x1F37D;&#xFE0F;</div>\n      <button class=\"modal-close\" onclick=\"closeOverlay()\">&#x2715;</button>\n      <div class=\"modal-body\">\n        <div class=\"modal-header-row\">\n          <div class=\"modal-title\" id=\"modalTitle\"></div>\n          <div class=\"modal-rating-badge unrated\" id=\"modalBadge\">\n            <div class=\"badge-num\" id=\"modalBadgeNum\">&#x2014;</div>\n            <div class=\"badge-label\">/ 10</div>\n          </div>\n        </div>\n        <div class=\"modal-source\" id=\"modalSource\"></div>\n        <div class=\"modal-description\" id=\"modalDesc\"></div>\n        <div class=\"modal-rate-row\">\n          <span class=\"rate-label\">Your rating:</span>\n          <div class=\"modal-rate-dots\" id=\"modalRateDots\"></div>\n        </div>\n        <div class=\"modal-columns\">\n          <div>\n            <div class=\"section-label\">Ingredients</div>\n            <ul class=\"ingredients-list\" id=\"modalIngredients\"></ul>\n          </div>\n          <div>\n            <div class=\"section-label\">Instructions</div>\n            <ol class=\"instructions-list\" id=\"modalInstructions\"></ol>\n          </div>\n        </div>\n      </div>\n    </div>\n  </div>\n\n  <script>\n    let allRecipes = [];\n    let ratings = {};\n    let currentRecipeKey = null;\n\n    const RATINGS_KEY = 'mamacita_ratings';\n\n    function loadRatingsFromStorage() {\n      try { return JSON.parse(localStorage.getItem(RATINGS_KEY) || '{}'); } catch(e) { return {}; }\n    }\n\n    function saveRatingsToStorage(r) {\n      localStorage.setItem(RATINGS_KEY, JSON.stringify(r));\n    }\n\n    function recipeKey(r) {\n      return r.url || r.title || '';\n    }\n\n    async function loadData() {\n      const res = await fetch('/api/recipes');\n      allRecipes = await res.json();\n      ratings = loadRatingsFromStorage();\n\n      allRecipes.sort((a, b) => {\n        const aHas = a.ingredients.length + a.instructions.length;\n        const bHas = b.ingredients.length + b.instructions.length;\n        if (aHas !== bHas) return bHas - aHas;\n        return (a.title || '').localeCompare(b.title || '');\n      });\n\n      applyFilters();\n      updateStats();\n    }\n\n    function updateStats() {\n      const total = allRecipes.length;\n      const rated = Object.keys(ratings).length;\n      document.getElementById('stats').innerHTML =\n        '<span class=\"dot\"></span> ' + total + ' recipes &nbsp;&middot;&nbsp; ' + rated + ' rated';\n    }\n\n    const PROTEIN_KEYWORDS = {\n      chicken:    ['chicken'],\n      turkey:     ['turkey'],\n      beef:       ['beef', 'steak', 'ground beef', 'pot roast', 'braised beef'],\n      salmon:     ['salmon', 'tuna', 'halibut', 'cod', 'fish', 'halloumi'],\n      shrimp:     ['shrimp', 'prawn'],\n      tofu:       ['tofu'],\n      chickpea:   ['chickpea', 'black bean', 'lentil', 'cannellini', 'white bean', 'great northern', 'adzuki', 'bean'],\n    };\n\n    function detectProtein(r) {\n      const text = [r.title || '', ...(r.ingredients || [])].join(' ').toLowerCase();\n      const found = new Set();\n      for (const [type, words] of Object.entries(PROTEIN_KEYWORDS)) {\n        if (words.some(w => text.includes(w))) found.add(type);\n      }\n      const animalProteins = ['chicken','turkey','beef','salmon','shrimp'];\n      if (!animalProteins.some(p => found.has(p))) found.add('vegetarian');\n      return found;\n    }\n\n    function applyFilters() {\n      const q = document.getElementById('search').value.toLowerCase().trim();\n      const minRating = parseInt(document.getElementById('ratingFilter').value) || 0;\n      const protein = document.getElementById('proteinFilter').value;\n\n      let filtered = allRecipes.filter(r => {\n        if (minRating > 0) {\n          const score = ratings[recipeKey(r)];\n          if (!score || score < minRating) return false;\n        }\n        if (protein) {\n          if (!detectProtein(r).has(protein)) return false;\n        }\n        if (!q) return true;\n        const haystack = [\n          r.title || '',\n          r.description || '',\n          ...(r.ingredients || []),\n          ...(r.instructions || []),\n          r.url || '',\n        ].join(' ').toLowerCase();\n        return q.split(' ').every(w => haystack.includes(w));\n      });\n\n      renderGrid(filtered);\n    }\n\n    function renderGrid(recipes) {\n      const grid = document.getElementById('grid');\n      if (!recipes.length) {\n        grid.innerHTML = '<div class=\"empty\"><div style=\"font-size:40px;margin-bottom:10px\">&#x1F50D;</div><div>No recipes found</div></div>';\n        return;\n      }\n      grid.innerHTML = recipes.map((r, i) => {\n        const key = recipeKey(r);\n        const score = ratings[key];\n        const tag = r.isManual ? 'manual' : r.source === 'error' ? 'error' : '';\n        const tagLabel = r.isManual ? 'Note' : r.source === 'error' ? 'Error' : r.ingredients.length > 0 ? (r.ingredients.length + ' ingr.') : 'Link only';\n        const domain = r.url ? (() => { try { return new URL(r.url).hostname.replace('www.',''); } catch(e) { return ''; }})() : '';\n        const imgHtml = r.image\n          ? '<img src=\"' + esc(r.image) + '\" onerror=\"this.style.display=\\'none\\'\" loading=\"lazy\" />'\n          : '&#x1F37D;&#xFE0F;';\n\n        const dots = Array.from({length:10},(_,n)=>{\n          const val = n+1;\n          const active = score && score >= val ? 'active' : '';\n          return '<div class=\"rating-dot ' + active + '\" data-val=\"' + val + '\" onclick=\"rateFromCard(event,\\'' + esc(key) + '\\',' + val + ')\" title=\"' + val + '/10\">' + val + '</div>';\n        }).join('');\n\n        return '<div class=\"card\" onclick=\"openRecipeByKey(\\'' + esc(key) + '\\')\">' +\n          '<div class=\"card-img\">' + imgHtml + '</div>' +\n          '<div class=\"card-body\">' +\n            '<div class=\"card-title\">' + esc(r.title || r.url || 'Untitled') + '</div>' +\n            '<div class=\"card-meta\">' +\n              (domain ? '<span class=\"tag\">' + esc(domain) + '</span>' : '') +\n              '<span class=\"tag ' + tag + '\">' + tagLabel + '</span>' +\n            '</div>' +\n          '</div>' +\n          '<div class=\"card-rating\">' +\n            '<div class=\"rating-label\">' + (score ? score + '/10' : 'Rate') + '</div>' +\n            '<div class=\"rating-dots\">' + dots + '</div>' +\n          '</div>' +\n        '</div>';\n      }).join('');\n    }\n\n    function rateFromCard(e, key, val) {\n      e.stopPropagation();\n      saveRating(key, val);\n    }\n\n    function saveRating(key, val) {\n      const current = ratings[key];\n      const newVal = current === val ? null : val;\n      if (newVal === null) { delete ratings[key]; } else { ratings[key] = newVal; }\n      saveRatingsToStorage(ratings);\n      if (currentRecipeKey === key) renderModalRating(key);\n      applyFilters();\n      updateStats();\n    }\n\n    function openRecipeByKey(key) {\n      const r = allRecipes.find(x => recipeKey(x) === key);\n      if (!r) return;\n      currentRecipeKey = key;\n\n      document.getElementById('modalTitle').textContent = r.title || 'Untitled';\n\n      const src = document.getElementById('modalSource');\n      src.innerHTML = r.url\n        ? '<a href=\"' + esc(r.url) + '\" target=\"_blank\" rel=\"noopener\">' + esc(r.url) + '</a>'\n        : '<em>From your Apple Notes</em>';\n\n      const desc = document.getElementById('modalDesc');\n      desc.textContent = r.description || '';\n      desc.style.display = r.description ? 'block' : 'none';\n\n      const hero = document.getElementById('modalHero');\n      hero.innerHTML = r.image\n        ? '<img src=\"' + esc(r.image) + '\" onerror=\"this.style.display=\\'none\\'\" />'\n        : '&#x1F37D;&#xFE0F;';\n\n      const ingList = document.getElementById('modalIngredients');\n      ingList.innerHTML = r.ingredients.length\n        ? r.ingredients.map(i => {\n            if (i.startsWith('\\u2014') && i.endsWith('\\u2014')) {\n              return '<li class=\"section-header\">' + esc(i.replace(/^\\u2014\\s*|\\s*\\u2014$/g,'')) + '</li>';\n            }\n            return '<li>' + esc(i) + '</li>';\n          }).join('')\n        : '<p class=\"no-content\">No ingredients listed</p>';\n\n      const insList = document.getElementById('modalInstructions');\n      if (!r.instructions.length) {\n        insList.innerHTML = '<p class=\"no-content\">No instructions available</p>';\n      } else {\n        let n = 0;\n        insList.innerHTML = r.instructions.map(step => {\n          if (step.startsWith('**') && step.endsWith('**')) {\n            return '<li class=\"step-section\">' + esc(step.replace(/\\*\\*/g,'')) + '</li>';\n          }\n          n++;\n          return '<li data-n=\"' + n + '\">' + esc(step) + '</li>';\n        }).join('');\n      }\n\n      renderModalRating(key);\n      document.getElementById('overlay').classList.add('open');\n      document.body.style.overflow = 'hidden';\n    }\n\n    function renderModalRating(key) {\n      const score = ratings[key];\n      const badge = document.getElementById('modalBadge');\n      const badgeNum = document.getElementById('modalBadgeNum');\n      if (score) {\n        badge.classList.remove('unrated');\n        badgeNum.textContent = score;\n      } else {\n        badge.classList.add('unrated');\n        badgeNum.textContent = '\\u2014';\n      }\n      const dotsEl = document.getElementById('modalRateDots');\n      dotsEl.innerHTML = Array.from({length:10},(_,n) => {\n        const val = n+1;\n        const active = score === val ? 'active' : '';\n        return '<div class=\"modal-rate-dot ' + active + '\" onclick=\"saveRating(\\'' + esc(key) + '\\',' + val + ')\">' + val + '</div>';\n      }).join('');\n    }\n\n    function closeOverlay() {\n      document.getElementById('overlay').classList.remove('open');\n      document.body.style.overflow = '';\n      currentRecipeKey = null;\n    }\n\n    function closeModal(e) {\n      if (e.target === document.getElementById('overlay')) closeOverlay();\n    }\n\n    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });\n    document.getElementById('search').addEventListener('input', applyFilters);\n\n    async function syncNow() {\n      const btn = document.getElementById('syncBtn');\n      const label = btn.querySelector('span');\n      btn.classList.add('syncing');\n      label.textContent = 'Syncing\\u2026';\n      try {\n        const res = await fetch('/api/sync', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });\n        const data = await res.json();\n        if (data.status === 'error') {\n          label.textContent = 'Error: ' + data.message;\n        } else {\n          await loadData();\n          label.textContent = 'Done (' + (data.fetched||0) + ' new, ' + (data.total||0) + ' total)';\n        }\n        setTimeout(() => { label.textContent = 'Sync Recipes'; }, 4000);\n      } catch(e) {\n        label.textContent = 'Error';\n        setTimeout(() => { label.textContent = 'Sync Recipes'; }, 3000);\n      }\n      btn.classList.remove('syncing');\n    }\n\n    async function addRecipe() {\n      const input = document.getElementById('addUrl');\n      const btn = document.getElementById('addBtn');\n      const status = document.getElementById('addStatus');\n      const url = input.value.trim();\n      if (!url || !url.startsWith('http')) {\n        status.className = 'add-status err';\n        status.textContent = 'Please paste a valid URL';\n        return;\n      }\n      btn.disabled = true;\n      btn.textContent = 'Adding...';\n      status.className = 'add-status';\n      status.textContent = '';\n      try {\n        const res = await fetch('/api/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url}) });\n        const data = await res.json();\n        if (data.status === 'ok') {\n          status.className = 'add-status ok';\n          status.textContent = '\\u2713 Added: ' + data.title;\n          input.value = '';\n          await loadData();\n        } else if (data.status === 'exists') {\n          status.className = 'add-status exists';\n          status.textContent = 'Already saved: ' + data.title;\n        } else {\n          status.className = 'add-status err';\n          status.textContent = 'Error: ' + (data.message || 'Could not fetch recipe');\n        }\n      } catch(e) {\n        status.className = 'add-status err';\n        status.textContent = 'Network error';\n      }\n      btn.disabled = false;\n      btn.textContent = 'Add Recipe';\n      setTimeout(() => { status.textContent = ''; status.className = 'add-status'; }, 5000);\n    }\n\n    function esc(str) {\n      return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');\n    }\n\n    loadData();\n  </script>\n</body>\n</html>\n"
+    def fetch_day(ds):
+        day_games = []
+        try:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
+            data = fetch_espn_url(url)
+            for event in data.get('events', []):
+                slug = event.get('season', {}).get('slug', '') or event.get('competitions', [{}])[0].get('type', {}).get('slug', '')
+                slug = slug.lower()
+                if slug not in KNOCKOUT_ROUND_MAP:
+                    continue
+                round_name, round_order = KNOCKOUT_ROUND_MAP[slug]
+                comp = event['competitions'][0]
+                status = comp['status']['type']['name']
+                is_done = status in ('STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT')
+                is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
+                                     'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
+                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
+                cs = comp['competitors']
+                if len(cs) < 2: continue
+                t1, t2 = cs[0], cs[1]
+                n1 = t1['team']['displayName']
+                n2 = t2['team']['displayName']
+                s1 = int(t1.get('score') or 0)
+                s2 = int(t2.get('score') or 0)
+                winner_norm = None
+                if is_done:
+                    winner_norm = norm(n1) if s1 > s2 else norm(n2)
+                # Extract DraftKings moneyline odds if available
+                ml_home = ml_away = ml_draw = None
+                try:
+                    odds_obj = comp.get('odds', [{}])[0]
+                    ml = odds_obj.get('moneyline', {})
+                    ml_home = ml.get('home', {}).get('close', {}).get('odds')
+                    ml_away = ml.get('away', {}).get('close', {}).get('odds')
+                    ml_draw = ml.get('draw', {}).get('close', {}).get('odds')
+                    if ml_home is not None: ml_home = float(ml_home)
+                    if ml_away is not None: ml_away = float(ml_away)
+                    if ml_draw is not None: ml_draw = float(ml_draw)
+                except Exception:
+                    pass
+                day_games.append({
+                    'round': round_name,
+                    'round_order': round_order,
+                    'slug': slug,
+                    'team1': norm(n1), 'team2': norm(n2),
+                    'team1_display': n1, 'team2_display': n2,
+                    'score1': s1, 'score2': s2,
+                    'done': is_done, 'live': is_live,
+                    'winner': winner_norm,
+                    'date': event['date'],
+                    'ml_home': ml_home, 'ml_away': ml_away, 'ml_draw': ml_draw,
+                })
+        except Exception:
+            pass
+        return day_games
 
-# ── HTTP handler ──────────────────────────────────────────────────────────────
+    games = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        for day_games in ex.map(fetch_day, dates):
+            games.extend(day_games)
+    games.sort(key=lambda g: (g['round_order'], g['date']))
+    return games
+
+def resolve_ko_placeholders(knockout_games, group_standings):
+    """Replace ESPN placeholder names (e.g. 'Group A Winner') with real team names
+    from our standings data, but only for groups that have finished all 3 games."""
+    import re
+    # Build lookup: 'Group A' → [1st_team, 2nd_team, 3rd_team]
+    group_lookup = {}
+    for grp in group_standings:
+        name = grp.get('name', '')   # e.g. 'Group A'
+        entries = grp.get('entries', [])
+        # Only use if all teams have played 3 games
+        if entries and all(int(e.get('gp', 0)) >= 3 for e in entries):
+            group_lookup[name] = [e['team'] for e in entries]
+
+    def resolve(display):
+        if not display:
+            return display
+        # "Group A Winner" / "Group A 1st Place"
+        m = re.match(r'(Group [A-L])\s+(?:Winner|1st)', display, re.I)
+        if m:
+            teams = group_lookup.get(m.group(1))
+            if teams:
+                return teams[0]
+        # "Group A Runner-up" / "Group A 2nd Place"
+        m = re.match(r'(Group [A-L])\s+(?:Runner.?up|2nd)', display, re.I)
+        if m:
+            teams = group_lookup.get(m.group(1))
+            if teams and len(teams) >= 2:
+                return teams[1]
+        return display
+
+    for g in knockout_games:
+        for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
+            resolved = resolve(g.get(key_d, ''))
+            if resolved != g.get(key_d):
+                g[key_d] = resolved
+                g[key_n] = norm(resolved)
+    return knockout_games
+
+def compute_knockout_pts(knockout_games, roster):
+    """Compute actual knockout points earned per player from completed knockout games."""
+    player_teams = {p: set(norm(t) for t in teams) for p, teams in roster.items()}
+    pts = {p: 0 for p in roster}
+
+    # Group games by round for bonus logic
+    by_round = {}
+    for g in knockout_games:
+        by_round.setdefault(g['round'], []).append(g)
+
+    for g in knockout_games:
+        if not g['done'] or not g['winner']:
+            continue
+        w = g['winner']
+        rnd = g['round']
+        for player, teams in player_teams.items():
+            if w in teams:
+                if rnd == '3rd Place':
+                    pts[player] += 2      # bronze: +2 not +4
+                elif rnd == 'Final':
+                    pts[player] += 4 + 4  # win + champion bonus
+                else:
+                    pts[player] += 4      # standard round win
+
+    # Runner-up bonus: +2 for final loser
+    for g in by_round.get('Final', []):
+        if not g['done']: continue
+        loser = g['team2'] if g['winner'] == g['team1'] else g['team1']
+        for player, teams in player_teams.items():
+            if loser in teams:
+                pts[player] += 2
+
+    return pts
+
+# ── Main data function (5-minute server-side cache) ────────────────────────────
+
+_cache = {'data': None, 'ts': 0}
+CACHE_TTL = 300  # seconds — shorter when a live game is in progress
+
+def get_data():
+    now = time.time()
+    cached = _cache['data']
+    # Use shorter TTL (30s) if a live game was detected last run
+    ttl = 30 if (cached and any(
+        g.get('live') for g in cached.get('_live_games', [])
+    )) else CACHE_TTL
+    if cached and (now - _cache['ts']) < ttl:
+        return cached
+    roster = FIXED_ROSTER
+    games = fetch_group_stage_games()
+    team_stats = build_team_stats(games)
+    players = calculate_scores(roster, team_stats)
+    done_games = [g for g in games if g['done']]
+    live_games = [g for g in games if g.get('live')]
+    group_standings = fetch_group_standings(live_games=live_games)
+    knockout_games = fetch_knockout_games()
+    knockout_games = resolve_ko_placeholders(knockout_games, group_standings)
+    # Include completed knockout games in Elo history so power rankings
+    # reflect actual R32/R16/QF results, not just group stage.
+    done_ko = [g for g in knockout_games if g.get('done')]
+    all_done = done_games + done_ko
+    # Combine group + knockout scheduled games for odds lookup in simulation.
+    all_scheduled = games + [g for g in knockout_games if not g.get('done') and not g.get('live')]
+    mc = run_monte_carlo(roster, team_stats, all_done, n=10000, all_games=all_scheduled, knockout_games=knockout_games)
+    ko_pts = compute_knockout_pts(knockout_games, roster)
+    # Add knockout pts to player totals
+    for p in players:
+        p['ko_pts'] = ko_pts.get(p['name'], 0)
+        p['total'] += p['ko_pts']
+    players.sort(key=lambda x: x['total'], reverse=True)
+    result = {
+        'players': players,
+        'sim_probs': mc['probs'],
+        'live_strengths': mc['live_strengths'],
+        'games_used': mc['games_used'],
+        'odds_used': mc['odds_used'],
+        'group_standings': group_standings,
+        'knockout_games': knockout_games,
+        'updated': datetime.now().strftime('%b %d, %Y · %I:%M:%S %p'),
+        '_live_games': live_games + [g for g in knockout_games if g.get('live')],
+    }
+    _cache['data'] = result
+    _cache['ts'] = time.time()
+    return result
+
 
 class Handler(BaseHTTPRequestHandler):
-    def send_body(self, body, ct="text/html; charset=utf-8", code=200):
-        if isinstance(body, str):
-            body = body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ct)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+    protocol_version = 'HTTP/1.1'
+
+    def send_body(self, body: bytes, content_type: str, status: int = 200):
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Connection', 'close')
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/api/recipes":
-            recipes = load_recipes()
-            self.send_body(json.dumps(recipes), "application/json")
-        elif path == "/api/config":
-            self.send_body(json.dumps({"syncAvailable": bool(GOOGLE_SHEET_URL)}), "application/json")
-        elif path == "/api/debug":
-            with _cache_lock:
-                mem_count = len(_recipes_mem) if _recipes_mem is not None else "not loaded"
-            debug = {
-                "GITHUB_TOKEN_SET": bool(GITHUB_TOKEN),
-                "GITHUB_REPO": GITHUB_REPO,
-                "GOOGLE_SHEET_URL_SET": bool(GOOGLE_SHEET_URL),
-                "recipes_in_memory": mem_count,
-                "syncing": _syncing,
-            }
+        if self.path.startswith('/api/data'):
             try:
-                urls = get_sheet_urls()
-                debug["sheet_urls_count"] = len(urls)
-                debug["sheet_last_url"] = urls[-1] if urls else ""
-                with _cache_lock:
-                    existing = set(_recipes_mem.keys() if _recipes_mem else [])
-                debug["new_urls_on_sheet"] = [u for u in urls if u not in existing]
+                data = get_data()
+                body = json.dumps(data).encode()
+                self.send_body(body, 'application/json')
             except Exception as e:
-                debug["sheet_error"] = str(e)
-            self.send_body(json.dumps(debug, indent=2), "application/json")
-        else:
-            self.send_body(HTML)
-
-    def do_POST(self):
-        if self.path == "/api/sync":
-            result = do_sync()
-            self.send_body(json.dumps(result), "application/json")
-        elif self.path == "/api/add":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or b"{}")
-            url = (body.get("url") or "").strip()
-            if not url or not url.startswith("http"):
-                self.send_body(json.dumps({"status": "error", "message": "Invalid URL"}), "application/json")
-                return
-            with _cache_lock:
-                if _recipes_mem and url in _recipes_mem:
-                    r = _recipes_mem[url]
-                    self.send_body(json.dumps({"status": "exists", "title": r.get("title", "?")}), "application/json")
-                    return
+                self.send_body(str(e).encode(), 'text/plain', 500)
+        elif self.path.startswith('/api/ko-debug'):
             try:
-                recipe = fetch_recipe(url)
-                with _cache_lock:
-                    if _recipes_mem is not None:
-                        _recipes_mem[url] = {**recipe, "url": url}
-                print(f"Added via URL box: {recipe.get('title','?')}")
-                self.send_body(json.dumps({"status": "ok", "title": recipe.get("title", "Untitled")}), "application/json")
+                # Return raw slug info from ESPN for knockout dates
+                import urllib.request
+                results = []
+                for ds in ['20260628','20260629','20260630','20260701','20260702','20260703']:
+                    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={ds}"
+                    with urllib.request.urlopen(url, timeout=10) as r:
+                        d = json.loads(r.read())
+                    for ev in d.get('events', []):
+                        slug = ev.get('season', {}).get('slug', 'NONE')
+                        comp = ev['competitions'][0]
+                        t = [c['team']['displayName'] for c in comp['competitors']]
+                        results.append({'date': ds, 'slug': slug, 'teams': t})
+                self.send_body(json.dumps(results, indent=2).encode(), 'application/json')
             except Exception as e:
-                self.send_body(json.dumps({"status": "error", "message": str(e)}), "application/json")
+                self.send_body(str(e).encode(), 'text/plain', 500)
         else:
-            self.send_body(json.dumps({"error": "not found"}), "application/json", 404)
+            body = HTML.encode('utf-8')
+            self.send_body(body, 'text/html; charset=utf-8')
 
     def log_message(self, fmt, *args):
-        pass
+        pass  # suppress server log noise
 
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    pass
 
-if __name__ == "__main__":
-    print(f"Mamacita's Recipes running on port {PORT}")
-    threading.Thread(target=load_recipes, daemon=True).start()
-    ThreadedHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+if __name__ == '__main__':
+    print(f'⚽ World Cup 2026 Pick\'em Dashboard')
+    print(f'   Running on port {PORT}')
+    HTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
