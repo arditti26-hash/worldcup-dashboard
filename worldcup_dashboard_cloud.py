@@ -385,9 +385,10 @@ body::before {
 }
 
 /* Knockout points tracker */
-.ko-tracker { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.ko-tracker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; }
+@media (max-width: 540px) { .ko-tracker { grid-template-columns: repeat(2, 1fr); } }
 .ko-tracker-card {
-  flex: 1; min-width: 100px; background: #0a1f12;
+  background: #0a1f12;
   border-radius: 12px; padding: 12px 14px; text-align: center;
   border: 1px solid rgba(250,204,21,0.1);
 }
