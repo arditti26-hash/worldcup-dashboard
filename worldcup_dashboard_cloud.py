@@ -369,12 +369,20 @@ body::before {
 .ko-team.loser { opacity: 0.4; }
 .ko-team.live-now { color: #22c55e; }
 .ko-owner-bar { width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
-.ko-score { margin-left: auto; font-size: 12px; font-weight: 900; flex-shrink: 0; }
+.ko-score { font-size: 12px; font-weight: 900; flex-shrink: 0; margin-left: 4px; }
 .ko-live-badge {
   font-size: 8px; font-weight: 800; color: #22c55e; background: rgba(34,197,94,0.15);
   padding: 1px 4px; border-radius: 3px; margin-left: 4px;
 }
 .ko-tbd { color: #2d4a36; font-style: italic; font-size: 10px; }
+.ko-owner-initial {
+  font-size: 9px; font-weight: 900; border: 1px solid; border-radius: 3px;
+  padding: 0 3px; margin-right: 4px; flex-shrink: 0; line-height: 16px;
+}
+.ko-pts-badge {
+  font-size: 9px; font-weight: 900; border: 1px solid; border-radius: 4px;
+  padding: 0 4px; margin-left: auto; flex-shrink: 0; line-height: 16px;
+}
 
 /* Knockout points tracker */
 .ko-tracker { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
@@ -455,6 +463,15 @@ body::before {
   <div class="live-badge"><div class="live-dot"></div>LIVE</div>
 </div>
 
+<div class="standings-section" id="knockout-section">
+  <div class="standings-title">📈 Knockout Points Tracker</div>
+  <div id="ko-pts-tracker"></div>
+  <div class="ko-bracket-section">
+    <div class="standings-title" style="margin-top:24px">🏆 Knockout Bracket</div>
+    <div id="knockout-bracket"></div>
+  </div>
+</div>
+
 <div class="page-body">
 
   <!-- Left: main content -->
@@ -488,15 +505,6 @@ body::before {
   </div>
 
 </div><!-- end page-body -->
-
-<div class="standings-section" id="knockout-section" style="display:none">
-  <div class="standings-title">📈 Knockout Points Tracker</div>
-  <div id="ko-pts-tracker"></div>
-  <div class="ko-bracket-section">
-    <div class="standings-title" style="margin-top:24px">🏆 Knockout Bracket</div>
-    <div id="knockout-bracket"></div>
-  </div>
-</div>
 
 <div class="standings-section">
   <div class="standings-title">⚽ Group Standings</div>
@@ -935,24 +943,37 @@ function renderKnockout(koGames, players) {
   const bracketRounds = allRounds.filter(r => r.name !== '3rd Place');
   const thirdPlace    = allRounds.find(r => r.name === '3rd Place');
 
+  // Points awarded per knockout round win
+  const KO_PTS = { 'Round of 32':4, 'Round of 16':4, 'Quarterfinals':4, 'Semifinals':4, '3rd Place':2, 'Final':8 };
+
   // Render a single team row
-  function teamRow(name, display, score, winner, loser, live) {
+  function teamRow(name, display, score, winner, loser, live, roundName) {
     const ok  = name ? teamOwners[name.toLowerCase()] : null;
-    const bar = ok && C[ok] ? C[ok].primary : '#1a3322';
+    const col = ok && C[ok] ? C[ok] : null;
+    const bar = col ? col.primary : '#1a3322';
     const cls = live ? 'ko-team live-now' : winner ? 'ko-team winner' : loser ? 'ko-team loser' : 'ko-team';
     const lbl = display || (name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '') || '<span class="ko-tbd">TBD</span>';
     const sc  = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
     const lv  = live ? '<span class="ko-live-badge">LIVE</span>' : '';
-    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${lbl}${lv}${sc}</div>`;
+    // Owner initial badge (always shown if team is owned)
+    const ownerBadge = col
+      ? `<span class="ko-owner-initial" style="color:${col.primary};border-color:${col.border}">${ok[0]}</span>`
+      : '';
+    // Points badge on win
+    const pts = KO_PTS[roundName] || 4;
+    const ptsBadge = winner && col
+      ? `<span class="ko-pts-badge" style="background:${col.bg};color:${col.primary};border-color:${col.border}">+${pts}</span>`
+      : '';
+    return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${ownerBadge}${lbl}${lv}${sc}${ptsBadge}</div>`;
   }
 
   // Render one game card
   function gameCard(g) {
-    const done = g.done, live = g.live;
+    const done = g.done, live = g.live, rn = g.round;
     const t1w = done && g.score1 > g.score2, t2w = done && g.score2 > g.score1;
     return `<div class="ko-game">
-      ${teamRow(g.team1, g.team1_display, done||live ? g.score1 : null, t1w, done&&!t1w, live)}
-      ${teamRow(g.team2, g.team2_display, done||live ? g.score2 : null, t2w, done&&!t2w, live)}
+      ${teamRow(g.team1, g.team1_display, done||live ? g.score1 : null, t1w, done&&!t1w, live, rn)}
+      ${teamRow(g.team2, g.team2_display, done||live ? g.score2 : null, t2w, done&&!t2w, live, rn)}
     </div>`;
   }
 
