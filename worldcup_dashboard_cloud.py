@@ -1011,9 +1011,9 @@ function renderKnockout(koGames, players) {
       }
     }
 
-    return `<div style="position:relative;width:${COL_W}px;height:${TOTAL_H}px;flex-shrink:0;margin-right:${CONN}px">
-      <div class="ko-round-title" style="position:sticky;top:0">${round.name}</div>
-      ${inner}
+    return `<div style="position:relative;width:${COL_W}px;flex-shrink:0;margin-right:${CONN}px">
+      <div class="ko-round-title" style="margin-bottom:10px">${round.name}</div>
+      <div style="position:relative;height:${TOTAL_H}px">${inner}</div>
     </div>`;
   }).join('');
 
