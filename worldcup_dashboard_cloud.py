@@ -1559,27 +1559,59 @@ def strength(team):
     return TEAM_STRENGTH.get(team, 55)  # default: mid-table unknown
 
 def compute_live_strengths(done_games, scheduled_games=None):
-    """Apply Elo updates from every completed tournament game to the baseline.
-    Group stage uses K=40; knockout rounds use K=80 (higher stakes = larger signal).
-    Sportsbook odds are used only for match-level probabilities in the Monte Carlo,
-    not to modify team ratings."""
-    # Identify knockout round order values (round_order >= 1 means KO)
+    """Compute live team strengths in two passes:
+    1. Elo updates from completed games (K=40 group, K=80 knockout).
+    2. Odds-implied adjustment for upcoming knockout games — the market
+       prices in current form far better than Elo alone. Only applied to
+       KO games (not group stage, where weak-opponent deflation is a problem).
+    """
+    import math as _math
     live = {team: float(v) for team, v in TEAM_STRENGTH.items()}
     for g in done_games:
         for t in (g['team1'], g['team2']):
             if t not in live:
                 live[t] = 55.0
+
+    # Pass 1 — Elo from completed games
     for g in done_games:
         t1, t2 = g['team1'], g['team2']
         r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
         expected1 = 1 / (1 + 10 ** (-(r1 - r2) * 20 / 400))
         s1, s2 = g['score1'], g['score2']
         actual1 = 1.0 if s1 > s2 else (0.5 if s1 == s2 else 0.0)
-        # Knockout games carry more Elo weight than group games
         K = 80 if g.get('round_order') else 40
         delta = K * (actual1 - expected1) / 20
         live[t1] = max(20.0, min(100.0, r1 + delta))
         live[t2] = max(20.0, min(100.0, r2 - delta))
+
+    # Pass 2 — Blend in odds-implied strength for upcoming knockout games.
+    # For each KO game with sportsbook odds, derive the implied strength
+    # differential and move both teams toward what the market says.
+    upcoming_ko = [g for g in (scheduled_games or [])
+                   if g.get('round_order') and not g.get('done') and not g.get('live')]
+    for g in upcoming_ko:
+        result = odds_match_probs(g)
+        if not result:
+            continue
+        p1, pd, p2 = result
+        total = p1 + p2
+        if total <= 0:
+            continue
+        p1_ko = p1 / total   # KO win prob for team1 (no draws)
+        p2_ko = p2 / total
+        if not (0.05 < p1_ko < 0.95):
+            continue  # skip extreme lines (avoid log instability)
+        t1, t2 = g['team1'], g['team2']
+        r1, r2 = live.get(t1, 55.0), live.get(t2, 55.0)
+        avg = (r1 + r2) / 2
+        # Elo inversion: r1 - r2 implied by market
+        implied_diff = 20 * _math.log10(p1_ko / p2_ko)
+        current_diff = r1 - r2
+        # 70% market, 30% Elo — market knows current form better
+        blended_diff = 0.70 * implied_diff + 0.30 * current_diff
+        live[t1] = max(20.0, min(100.0, avg + blended_diff / 2))
+        live[t2] = max(20.0, min(100.0, avg - blended_diff / 2))
+
     return live
 
 def _ml_to_implied(ml):
@@ -1974,6 +2006,19 @@ def fetch_knockout_games():
                 winner_norm = None
                 if is_done:
                     winner_norm = norm(n1) if s1 > s2 else norm(n2)
+                # Extract DraftKings moneyline odds if available
+                ml_home = ml_away = ml_draw = None
+                try:
+                    odds_obj = comp.get('odds', [{}])[0]
+                    ml = odds_obj.get('moneyline', {})
+                    ml_home = ml.get('home', {}).get('close', {}).get('odds')
+                    ml_away = ml.get('away', {}).get('close', {}).get('odds')
+                    ml_draw = ml.get('draw', {}).get('close', {}).get('odds')
+                    if ml_home is not None: ml_home = float(ml_home)
+                    if ml_away is not None: ml_away = float(ml_away)
+                    if ml_draw is not None: ml_draw = float(ml_draw)
+                except Exception:
+                    pass
                 day_games.append({
                     'round': round_name,
                     'round_order': round_order,
@@ -1984,6 +2029,7 @@ def fetch_knockout_games():
                     'done': is_done, 'live': is_live,
                     'winner': winner_norm,
                     'date': event['date'],
+                    'ml_home': ml_home, 'ml_away': ml_away, 'ml_draw': ml_draw,
                 })
         except Exception:
             pass
