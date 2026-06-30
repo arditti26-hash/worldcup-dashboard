@@ -2026,10 +2026,16 @@ def fetch_knockout_games():
                 round_name, round_order = KNOCKOUT_ROUND_MAP[slug]
                 comp = event['competitions'][0]
                 status = comp['status']['type']['name']
-                is_done = status in ('STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT')
+                is_done = status in (
+                    'STATUS_FULL_TIME', 'STATUS_FINAL', 'STATUS_FT',
+                    'STATUS_FINAL_AET', 'STATUS_FINAL_PEN',
+                    'STATUS_FULL_TIME_AET', 'STATUS_FULL_TIME_PEN',
+                    'STATUS_AFTER_EXTRA_TIME', 'STATUS_AFTER_PENALTIES',
+                )
                 is_live = status in ('STATUS_IN_PROGRESS', 'STATUS_HALFTIME',
                                      'STATUS_FIRST_HALF', 'STATUS_SECOND_HALF',
-                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY')
+                                     'STATUS_EXTRA_TIME', 'STATUS_PENALTY',
+                                     'STATUS_EXTRA_TIME_HALF')
                 cs = comp['competitors']
                 if len(cs) < 2: continue
                 t1, t2 = cs[0], cs[1]
@@ -2039,7 +2045,13 @@ def fetch_knockout_games():
                 s2 = int(t2.get('score') or 0)
                 winner_norm = None
                 if is_done:
-                    winner_norm = norm(n1) if s1 > s2 else norm(n2)
+                    # Prefer ESPN's own winner flag (handles penalties correctly)
+                    if t1.get('winner') is True:
+                        winner_norm = norm(n1)
+                    elif t2.get('winner') is True:
+                        winner_norm = norm(n2)
+                    else:
+                        winner_norm = norm(n1) if s1 > s2 else norm(n2)
                 # Extract DraftKings moneyline odds if available
                 ml_home = ml_away = ml_draw = None
                 try:
@@ -2063,6 +2075,7 @@ def fetch_knockout_games():
                     'done': is_done, 'live': is_live,
                     'winner': winner_norm,
                     'date': event['date'],
+                    'event_id': event.get('id', ''),
                     'ml_home': ml_home, 'ml_away': ml_away, 'ml_draw': ml_draw,
                 })
         except Exception:
@@ -2089,6 +2102,28 @@ def resolve_ko_placeholders(knockout_games, group_standings):
         if entries and all(int(e.get('gp', 0)) >= 3 for e in entries):
             group_lookup[name] = [e['team'] for e in entries]
 
+    # Build R32 game number → winner mapping.
+    # ESPN labels R16 slots as "Round of 32 N Winner" where N is the R32 game sequence number.
+    # We assign sequence numbers by sorting all R32 games by date then by ESPN event order.
+    r32_games_sorted = sorted(
+        [g for g in knockout_games if g.get('round_order') == 1],
+        key=lambda g: (g.get('date', ''), g.get('event_id', ''))
+    )
+    r32_num_to_winner = {}   # 1-indexed game number → winner display name
+    r32_num_to_norm   = {}   # 1-indexed game number → winner norm
+    for idx, g in enumerate(r32_games_sorted, start=1):
+        if g.get('done') and g.get('winner'):
+            w_norm = g['winner']
+            # Determine winner's display name
+            if norm(g.get('team1_display', '')) == w_norm:
+                w_disp = g['team1_display']
+            elif norm(g.get('team2_display', '')) == w_norm:
+                w_disp = g['team2_display']
+            else:
+                w_disp = w_norm.title()
+            r32_num_to_winner[idx] = w_disp
+            r32_num_to_norm[idx]   = w_norm
+
     def resolve(display):
         if not display:
             return display
@@ -2106,12 +2141,27 @@ def resolve_ko_placeholders(knockout_games, group_standings):
                 return teams[1]
         return display
 
+    # First pass: resolve group placeholders
     for g in knockout_games:
         for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
             resolved = resolve(g.get(key_d, ''))
             if resolved != g.get(key_d):
                 g[key_d] = resolved
                 g[key_n] = norm(resolved)
+
+    # Second pass: resolve "Round of 32 N Winner" in R16+ games using completed R32 results.
+    for g in knockout_games:
+        if g.get('round_order', 0) <= 1:
+            continue
+        for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
+            disp = g.get(key_d, '')
+            m = re.search(r'Round\s+of\s+32\s+(\d+)\s+Winner', disp, re.I)
+            if m:
+                game_num = int(m.group(1))
+                if game_num in r32_num_to_winner:
+                    g[key_d] = r32_num_to_winner[game_num]
+                    g[key_n] = r32_num_to_norm[game_num]
+
     return knockout_games
 
 def compute_knockout_pts(knockout_games, roster):
@@ -2237,6 +2287,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_body(json.dumps(results, indent=2).encode(), 'application/json')
             except Exception as e:
                 self.send_body(str(e).encode(), 'text/plain', 500)
+        elif self.path.startswith('/api/clear-cache'):
+            _cache['data'] = None
+            _cache['ts'] = 0
+            self.send_body(b'Cache cleared', 'text/plain')
         else:
             body = HTML.encode('utf-8')
             self.send_body(body, 'text/html; charset=utf-8')
