@@ -321,6 +321,39 @@ body::before {
   border: 1px solid rgba(34,197,94,0.3); padding: 1px 5px; border-radius: 4px;
   vertical-align: middle;
 }
+/* ── Group Points Overview tiles ── */
+.gpo-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+}
+.gpo-card {
+  background: #0a1f12; border: 1px solid rgba(250,204,21,0.10);
+  border-radius: 10px; overflow: hidden;
+}
+.gpo-card-live { border-color: rgba(34,197,94,0.3) !important; }
+.gpo-header {
+  background: #0f2a18; padding: 5px 10px;
+  font-family: 'Oswald', sans-serif; font-size: 11px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: #facc15;
+  display: flex; align-items: center; gap: 6px;
+}
+.gpo-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border-bottom: 1px solid #0d2015; font-size: 11px;
+  color: #8aad92;
+}
+.gpo-row:last-child { border-bottom: none; }
+.gpo-row.adv-yes { color: #22c55e; }
+.gpo-row.adv-maybe { color: #facc15; }
+.gpo-row.adv-no { color: #3a5a42; }
+.gpo-row .gpo-flag { font-size: 13px; flex-shrink: 0; }
+.gpo-row .gpo-name { flex: 1; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gpo-row .gpo-owner { font-size: 8px; font-weight: 800; padding: 1px 3px; border-radius: 3px; flex-shrink: 0; }
+.gpo-row .gpo-pts { font-size: 11px; font-weight: 800; flex-shrink: 0; min-width: 18px; text-align: right; }
+.gpo-row .gpo-bonus { font-size: 8px; padding: 1px 3px; border-radius: 3px; background: rgba(250,204,21,0.15); color: #facc15; flex-shrink: 0; margin-left: 2px; }
+.gpo-row .gpo-bonus.adv-wildcard { background: rgba(34,197,94,0.15); color: #22c55e; }
+.gpo-row .gpo-bonus.eliminated { background: rgba(90,30,30,0.3); color: #6b3333; }
+@media (max-width: 900px) { .gpo-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .gpo-grid { grid-template-columns: repeat(2, 1fr); } }
 .group-card-live { border-color: rgba(34,197,94,0.3) !important; }
 .group-table tr.grp-live-row td { font-style: italic; }
 @media (max-width: 700px) {
@@ -473,8 +506,12 @@ body::before {
 <div class="standings-section" id="knockout-section">
   <div class="standings-title">📈 Knockout Points Tracker</div>
   <div id="ko-pts-tracker"></div>
+  <div class="standings-title" style="margin-top:28px">⚽ Group Stage Points</div>
+  <div class="gpo-grid" id="gpo-grid">
+    <div style="color:#4a7a56;font-size:12px;padding:8px;">Loading…</div>
+  </div>
   <div class="ko-bracket-section">
-    <div class="standings-title" style="margin-top:24px">🏆 Knockout Bracket</div>
+    <div class="standings-title" style="margin-top:28px">🏆 Knockout Bracket</div>
     <div id="knockout-bracket"></div>
   </div>
 </div>
@@ -1076,6 +1113,7 @@ async function updateAll() {
     renderMonteCarlo(data.sim_probs, data.players);
     renderPowerRankings(data.live_strengths, data.games_used, data.odds_used);
     renderStandings(data.group_standings);
+    renderGroupPoints(data.group_standings, data.players);
     renderKnockout(data.knockout_games, data.players);
     const oddsNote = data.odds_used > 0 ? ` · DraftKings odds on ${data.odds_used} games` : '';
     document.getElementById('footer').textContent = `Scores from ESPN${oddsNote} · Updated: ${data.updated}`;
@@ -1167,6 +1205,56 @@ function renderStandings(groups) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>`;
+  }).join('');
+}
+
+function renderGroupPoints(groups, players) {
+  const el = document.getElementById('gpo-grid');
+  if (!el || !groups || !groups.length) return;
+
+  // Build per-team earned pts: match pts (W=3, D=1) + group bonus (1st=+4, 2nd=+2, 3rd wildcard=+1)
+  // We derive match pts from group standings: W*3 + D*1
+  // Group bonus only once group is done (all 3 games played)
+
+  // Build teamOwners map already exists globally — use it
+  el.innerHTML = groups.map(g => {
+    const isDone = g.entries.length > 0 && g.entries.every(e => parseInt(e.gp) >= 3);
+    const rows = g.entries.map((e, idx) => {
+      const rank = idx + 1; // 1-based after sort
+      const matchPts = parseInt(e.w||0)*3 + parseInt(e.d||0);
+      let bonus = 0, bonusLabel = '', bonusCls = '';
+      if (isDone) {
+        if (rank === 1)      { bonus = 4; bonusLabel = '+4 1st'; }
+        else if (rank === 2) { bonus = 2; bonusLabel = '+2 2nd'; }
+        else if (rank === 3 && e.adv !== 'no') { bonus = 1; bonusLabel = '+1 3rd'; bonusCls = ' adv-wildcard'; }
+        else if (rank >= 4 || (rank === 3 && e.adv === 'no')) { bonusLabel = 'OUT'; bonusCls = ' eliminated'; }
+      } else if (e.adv === 'yes') {
+        // Group decided but not all done yet — group winner/runner-up locked
+        if (rank === 1)      { bonus = 4; bonusLabel = '+4 1st'; }
+        else if (rank === 2) { bonus = 2; bonusLabel = '+2 2nd'; }
+      }
+      const earned = matchPts + bonus;
+      const advCls = e.adv === 'yes' ? 'adv-yes' : e.adv === 'maybe' ? 'adv-maybe' : e.adv === 'no' ? 'adv-no' : '';
+      const ownerKey = teamOwners[normalizeName(e.team)] || teamOwners[e.team.toLowerCase()];
+      const ownerStyle = ownerKey && C[ownerKey]
+        ? `background:${C[ownerKey].bg};color:${C[ownerKey].primary};border:1px solid ${C[ownerKey].border}`
+        : 'display:none';
+      const ownerEl = `<span class="gpo-owner" style="${ownerStyle}">${ownerKey ? ownerKey[0] : ''}</span>`;
+      const teamFl = `<span class="gpo-flag">${flag(normalizeName(e.team))}</span>`;
+      const bonusBadge = bonusLabel ? `<span class="gpo-bonus${bonusCls}">${bonusLabel}</span>` : '';
+      const liveDot = e.is_live ? `<span class="grp-live-dot"></span>` : '';
+      return `<div class="gpo-row ${advCls}">
+        ${liveDot}${teamFl}${ownerEl}
+        <span class="gpo-name">${e.team}</span>
+        <span class="gpo-pts">${earned}</span>
+        ${bonusBadge}
+      </div>`;
+    }).join('');
+    const liveTag = g.has_live ? '<span class="grp-live-badge" style="font-size:8px">LIVE</span>' : '';
+    return `<div class="gpo-card${g.has_live ? ' gpo-card-live' : ''}">
+      <div class="gpo-header">${g.name} ${liveTag}</div>
+      ${rows}
     </div>`;
   }).join('');
 }
