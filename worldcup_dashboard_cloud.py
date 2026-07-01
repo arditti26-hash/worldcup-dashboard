@@ -506,13 +506,20 @@ body::before {
 <div class="standings-section" id="knockout-section">
   <div class="standings-title">📈 Knockout Points Tracker</div>
   <div id="ko-pts-tracker"></div>
-  <div class="standings-title" style="margin-top:28px">⚽ Group Stage Points</div>
-  <div class="gpo-grid" id="gpo-grid">
-    <div style="color:#4a7a56;font-size:12px;padding:8px;">Loading…</div>
-  </div>
+
+  <!-- Player cards: team-by-team points as they advance -->
+  <div class="standings-title" style="margin-top:28px">🃏 Player Team Cards</div>
+  <div class="cards-grid" id="cards"></div>
+
   <div class="ko-bracket-section">
     <div class="standings-title" style="margin-top:28px">🏆 Knockout Bracket</div>
     <div id="knockout-bracket"></div>
+  </div>
+
+  <!-- Group Stage Points: below bracket -->
+  <div class="standings-title" style="margin-top:28px">⚽ Group Stage Points</div>
+  <div class="gpo-grid" id="gpo-grid">
+    <div style="color:#4a7a56;font-size:12px;padding:8px;">Loading…</div>
   </div>
 </div>
 
@@ -531,9 +538,8 @@ body::before {
 
 <div class="page-body">
 
-  <!-- Left: main content -->
+  <!-- Left: footer -->
   <div class="main-col">
-    <div class="cards-grid" id="cards"></div>
     <div class="footer" id="footer"></div>
   </div>
 
