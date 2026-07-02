@@ -142,12 +142,14 @@ body::before {
 
 .team-list { padding: 0 20px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .team-item {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; border-radius: 7px; background: rgba(255,255,255,0.025);
 }
-.team-name { font-size: 12px; color: #a8c2ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; display: flex; align-items: center; gap: 5px; }
+.team-total { font-family: 'Oswald', sans-serif; font-size: 18px; font-weight: 900; min-width: 26px; text-align: right; flex-shrink: 0; line-height: 1; }
+.team-total-divider { width: 1px; height: 24px; background: rgba(255,255,255,0.08); flex-shrink: 0; margin: 0 2px; }
+.team-name { font-size: 12px; color: #a8c2ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .team-flag { font-size: 14px; flex-shrink: 0; line-height: 1; }
-.team-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
+.team-right { display: flex; align-items: center; gap: 3px; flex: 1; justify-content: flex-end; flex-wrap: wrap; min-width: 0; }
 .team-pts { font-size: 12px; font-weight: 800; min-width: 14px; text-align: right; }
 .pts-none  { color: #1e3a26; }
 .pts-zero  { color: #3f5a47; }
@@ -763,29 +765,35 @@ function renderCards(players) {
     const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
     const bestRankText = bestRank === 1 ? '🏆 Can win' : `Best: #${bestRank}`;
 
-    const KO_ROUND_SHORT = {
-      'Round of 32': 'R32', 'Round of 16': 'R16',
-      'Quarterfinals': 'QF', 'Semifinals': 'SF',
-      '3rd Place': '3rd', 'Final': 'Champ', 'Final (RU)': 'RU',
-    };
     const teamsHtml = p.teams.map(t => {
-      const pts = t.match_pts ?? t.pts ?? null;
-      const display = pts !== null ? pts : '—';
-      const bonus = t.group_bonus > 0 ? `<span class="team-bonus" title="Group ${t.group_position === 1 ? 'winner' : t.group_position === 2 ? '2nd' : '3rd'} bonus">+${t.group_bonus}</span>` : '';
+      const matchPts = t.match_pts ?? t.pts ?? 0;
+      const groupBonus = t.group_bonus ?? 0;
+      const koWins = (t.ko_wins || []).sort((a,b) => a.round_order - b.round_order);
+      const koPtsSum = koWins.reduce((s, w) => s + w.pts, 0);
+      const teamTotal = matchPts + groupBonus + koPtsSum;
+      const totalCls = teamTotal === 0 ? 'pts-zero' : teamTotal < 5 ? 'pts-low' : 'pts-high';
+
       const isLive = (t.games || []).some(g => g.live);
       const liveGame = isLive ? t.games.find(g => g.live) : null;
       const liveTip = liveGame ? `LIVE vs ${liveGame.opp_name}` : '';
-      // KO wins badges
-      const koWins = (t.ko_wins || []).sort((a,b) => a.round_order - b.round_order);
+
+      // Group bonus badge: just "+N" with tooltip
+      const bonusBadge = groupBonus > 0
+        ? `<span class="team-bonus" title="Group ${t.group_position === 1 ? '1st' : t.group_position === 2 ? '2nd' : '3rd'} bonus">+${groupBonus}</span>`
+        : '';
+
+      // KO round badges: just "+N", no round label (tooltip shows round name)
       const koBadges = koWins.map(w => {
-        const short = KO_ROUND_SHORT[w.round] || w.round;
         const isChamp = w.round === 'Final';
         const isRU = w.round === 'Final (RU)';
         const bg = isChamp ? 'rgba(250,204,21,0.25)' : isRU ? 'rgba(139,92,246,0.2)' : 'rgba(34,197,94,0.15)';
         const col = isChamp ? '#facc15' : isRU ? '#a78bfa' : '#22c55e';
-        return `<span class="ko-win-badge" style="background:${bg};color:${col}" title="${w.round} +${w.pts}pts">${short} +${w.pts}</span>`;
+        return `<span class="ko-win-badge" style="background:${bg};color:${col}" title="${w.round} +${w.pts}pts">+${w.pts}</span>`;
       }).join('');
+
       return `<div class="team-item ${isLive ? 'team-live' : ''}">
+        <span class="team-total ${totalCls}">${teamTotal}</span>
+        <div class="team-total-divider"></div>
         <span class="team-name">
           <span class="team-flag">${flag(t.name)}</span>
           ${t.name}
@@ -793,8 +801,7 @@ function renderCards(players) {
         </span>
         <div class="team-right">
           ${buildPips(t.games)}
-          <span class="team-pts ${ptsClass(pts)}">${display}</span>
-          ${bonus}${koBadges}
+          ${bonusBadge}${koBadges}
         </div>
       </div>`;
     }).join('');
