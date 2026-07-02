@@ -178,6 +178,7 @@ body::before {
 .pip-live  { background: #22c55e; color: #07170d; animation: blink 1s infinite; }
 .pip-empty { background: transparent; border: 1.5px dashed #1e3a26; border-radius: 3px; }
 .team-bonus { font-size: 10px; font-weight: 800; color: #facc15; margin-left: 2px; }
+.ko-win-badge { font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 4px; margin-left: 2px; white-space: nowrap; }
 .team-live { background: rgba(34,197,94,0.1) !important; border: 1px solid rgba(34,197,94,0.3) !important; }
 .live-pip {
   display: inline-block; width: 6px; height: 6px;
@@ -434,6 +435,10 @@ body::before {
 .ko-tracker-alive { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
 .ko-alive-count { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 900; }
 .ko-alive-label { font-size: 9px; color: #4a7a56; }
+.ko-tracker-prob { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+.ko-prob-bar-bg { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; margin-bottom: 5px; }
+.ko-prob-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.ko-prob-pct { font-size: 10px; font-weight: 800; }
 .ko-tracker-breakdown { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
 .ko-breakdown-item { font-size: 10px; color: #4a7a56; }
 .ko-breakdown-item strong { font-weight: 800; }
@@ -758,6 +763,11 @@ function renderCards(players) {
     const bestRank = players.filter(o => o.name !== p.name && o.total > p.best_possible).length + 1;
     const bestRankText = bestRank === 1 ? '🏆 Can win' : `Best: #${bestRank}`;
 
+    const KO_ROUND_SHORT = {
+      'Round of 32': 'R32', 'Round of 16': 'R16',
+      'Quarterfinals': 'QF', 'Semifinals': 'SF',
+      '3rd Place': '3rd', 'Final': 'Champ', 'Final (RU)': 'RU',
+    };
     const teamsHtml = p.teams.map(t => {
       const pts = t.match_pts ?? t.pts ?? null;
       const display = pts !== null ? pts : '—';
@@ -765,6 +775,16 @@ function renderCards(players) {
       const isLive = (t.games || []).some(g => g.live);
       const liveGame = isLive ? t.games.find(g => g.live) : null;
       const liveTip = liveGame ? `LIVE vs ${liveGame.opp_name}` : '';
+      // KO wins badges
+      const koWins = (t.ko_wins || []).sort((a,b) => a.round_order - b.round_order);
+      const koBadges = koWins.map(w => {
+        const short = KO_ROUND_SHORT[w.round] || w.round;
+        const isChamp = w.round === 'Final';
+        const isRU = w.round === 'Final (RU)';
+        const bg = isChamp ? 'rgba(250,204,21,0.25)' : isRU ? 'rgba(139,92,246,0.2)' : 'rgba(34,197,94,0.15)';
+        const col = isChamp ? '#facc15' : isRU ? '#a78bfa' : '#22c55e';
+        return `<span class="ko-win-badge" style="background:${bg};color:${col}" title="${w.round} +${w.pts}pts">${short} +${w.pts}</span>`;
+      }).join('');
       return `<div class="team-item ${isLive ? 'team-live' : ''}">
         <span class="team-name">
           <span class="team-flag">${flag(t.name)}</span>
@@ -774,7 +794,7 @@ function renderCards(players) {
         <div class="team-right">
           ${buildPips(t.games)}
           <span class="team-pts ${ptsClass(pts)}">${display}</span>
-          ${bonus}
+          ${bonus}${koBadges}
         </div>
       </div>`;
     }).join('');
@@ -943,7 +963,7 @@ function renderMonteCarlo(simProbs, players) {
   }).join('');
 }
 
-function renderKnockout(koGames, players) {
+function renderKnockout(koGames, players, simProbs) {
   const section = document.getElementById('knockout-section');
   const bracketEl = document.getElementById('knockout-bracket');
   const trackerEl = document.getElementById('ko-pts-tracker');
@@ -979,6 +999,8 @@ function renderKnockout(koGames, players) {
       const f = FLAGS[normalizeName(t.name)] || '';
       return `${f} ${t.name}`;
     }).join(', ');
+    const winProb = simProbs ? (simProbs[p.name] ?? simProbs[name] ?? 0) : 0;
+    const winProbPct = winProb.toFixed(1);
     return `<div class="ko-tracker-card" style="border-color:${col.border};background:${col.bg}">
       <div class="ko-tracker-name" style="color:${col.primary}">${name}</div>
       <div class="ko-tracker-pts" style="color:${col.primary}">${total}</div>
@@ -993,23 +1015,23 @@ function renderKnockout(koGames, players) {
         <span class="ko-alive-count" style="color:${col.primary}">${teamsLeft}</span>
         <span class="ko-alive-label"> team${teamsLeft !== 1 ? 's' : ''} left</span>
       </div>
+      <div class="ko-tracker-prob">
+        <div class="ko-prob-bar-bg">
+          <div class="ko-prob-bar-fill" style="width:${Math.min(winProb,100)}%;background:${col.primary}"></div>
+        </div>
+        <span class="ko-prob-pct" style="color:${col.primary}">${winProbPct}% win chance</span>
+      </div>
     </div>`;
   }).join('')}</div>`;
 
   if (!koGames || koGames.length === 0) return;
 
   // ── Bracket ─────────────────────────────────────────────────────
-  // Layout constants — must match .ko-team height in CSS (24px × 2 = 48px game)
-  const GAME_H  = 52;   // px: height of one game card (2 × 26px team rows)
-  const SLOT    = 72;   // px: vertical slot for one R32 game (gap = 72-48=24px)
-  const COL_W   = 168;  // px: column width
-  const CONN    = 32;   // px: connector width between columns
-
-  // Vertical center of bracket position (roundIdx, gameIdx)
-  function center(r, i) { return (i + 0.5) * SLOT * Math.pow(2, r); }
-  function top(r, i)    { return center(r, i) - GAME_H / 2; }
-
-  const TOTAL_H = 16 * SLOT; // 1152px — full bracket height
+  const GAME_H = 52;   // px height of one game card
+  const SLOT   = 72;   // px vertical slot per R32 game
+  const COL_W  = 168;  // px column width
+  const CONN   = 32;   // px connector width between columns
+  const TOTAL_H = 16 * SLOT; // 1152px
 
   // Group games by round
   const rounds = {};
@@ -1035,11 +1057,9 @@ function renderKnockout(koGames, players) {
     const lbl = display || (name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '') || '<span class="ko-tbd">TBD</span>';
     const sc  = score !== null && score !== undefined ? `<span class="ko-score">${score}</span>` : '';
     const lv  = live ? '<span class="ko-live-badge">LIVE</span>' : '';
-    // Owner initial badge (always shown if team is owned)
     const ownerBadge = col
       ? `<span class="ko-owner-initial" style="color:${col.primary};border-color:${col.border}">${ok[0]}</span>`
       : '';
-    // Points badge on win
     const pts = KO_PTS[roundName] || 4;
     const ptsBadge = winner && col
       ? `<span class="ko-pts-badge" style="background:${col.bg};color:${col.primary};border-color:${col.border}">+${pts}</span>`
@@ -1047,7 +1067,6 @@ function renderKnockout(koGames, players) {
     return `<div class="${cls}"><div class="ko-owner-bar" style="background:${bar}"></div>${ownerBadge}${teamFlag}${lbl}${lv}${sc}${ptsBadge}</div>`;
   }
 
-  // Render one game card
   function gameCard(g) {
     const done = g.done, live = g.live, rn = g.round;
     const t1w = done && g.score1 > g.score2, t2w = done && g.score2 > g.score1;
@@ -1057,31 +1076,104 @@ function renderKnockout(koGames, players) {
     </div>`;
   }
 
-  // Render each round column with absolute-positioned games + connector lines
+  // ── Tree-based bracket layout ─────────────────────────────────
+  // R32 games have bracket_idx (0-based, from backend sort).
+  // R16 games have r32_src_0 / r32_src_1 telling which R32 game indices feed them.
+  // Higher rounds chain off computed R16 centers.
+
+  // Center y of R32 game at bracket_idx
+  function r32Center(bIdx) { return (bIdx + 0.5) * SLOT; }
+
+  // Compute center y for each game in each round, using actual parentage.
+  // gameCenters[round_order] = [y0, y1, ...] parallel to round.games (sorted by computed y)
+  const gameCenters = {};
+
+  // R32: sort by bracket_idx, assign centers
+  const r32Round = bracketRounds.find(r => r.order === 1);
+  if (r32Round) {
+    r32Round.games.sort((a, b) => (a.bracket_idx ?? 99) - (b.bracket_idx ?? 99));
+    gameCenters[1] = r32Round.games.map(g => r32Center(g.bracket_idx ?? 0));
+  }
+
+  // R16: position at midpoint of the two R32 parents
+  const r16Round = bracketRounds.find(r => r.order === 2);
+  if (r16Round && r32Round) {
+    r16Round.games.forEach(g => {
+      const s0 = g.r32_src_0, s1 = g.r32_src_1;
+      if (s0 != null && s1 != null) {
+        g._centerY = (r32Center(s0) + r32Center(s1)) / 2;
+      }
+    });
+    // Sort R16 by computed center so they appear top-to-bottom correctly
+    r16Round.games.sort((a, b) => (a._centerY ?? 9999) - (b._centerY ?? 9999));
+    gameCenters[2] = r16Round.games.map((g, i) =>
+      g._centerY != null ? g._centerY : (i + 0.5) * SLOT * 2
+    );
+  }
+
+  // QF and beyond: pair consecutive games from previous round
+  function deriveCenters(round, prevCenters) {
+    const centers = [];
+    for (let i = 0; i < round.games.length; i++) {
+      const p1 = prevCenters[i * 2];
+      const p2 = prevCenters[i * 2 + 1];
+      centers.push(p1 != null && p2 != null ? (p1 + p2) / 2 : (i + 0.5) * SLOT * Math.pow(2, bracketRounds.indexOf(round)));
+    }
+    return centers;
+  }
+  bracketRounds.forEach((round) => {
+    if (round.order <= 2) return;
+    const prevRound = bracketRounds.find(r => r.order === round.order - 1);
+    const prevCenters = prevRound ? gameCenters[prevRound.order] : null;
+    gameCenters[round.order] = prevCenters
+      ? deriveCenters(round, prevCenters)
+      : round.games.map((_, i) => (i + 0.5) * SLOT * Math.pow(2, round.order - 1));
+  });
+
+  // ── Render columns ─────────────────────────────────────────────
   const LINE = 'rgba(250,204,21,0.35)';
-  const cols = bracketRounds.map((round, rIdx) => {
+  const cols = bracketRounds.map((round) => {
+    const centers = gameCenters[round.order] || [];
     let inner = '';
 
-    // Game cards
+    // Game cards at computed positions
     round.games.forEach((g, gIdx) => {
-      const t = Math.round(top(rIdx, gIdx));
+      const cy = centers[gIdx] ?? (gIdx + 0.5) * SLOT;
+      const t = Math.round(cy - GAME_H / 2);
       inner += `<div style="position:absolute;top:${t}px;left:0;right:0">${gameCard(g)}</div>`;
     });
 
-    // Right-side connector lines (bracket shape joining pairs → next round)
-    if (rIdx < bracketRounds.length - 1) {
-      for (let i = 0; i < round.games.length; i += 2) {
-        const c1  = Math.round(center(rIdx, i));
-        const c2  = Math.round(center(rIdx, i + 1));
-        const mid = Math.round((c1 + c2) / 2);
-        const hx  = CONN / 2 - 1;
-        // horizontal stubs out from each game
-        inner += `<div style="position:absolute;left:${COL_W}px;top:${c1}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
-        inner += `<div style="position:absolute;left:${COL_W}px;top:${c2}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
-        // vertical bar connecting them
-        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${c1}px;width:1px;height:${c2-c1}px;background:${LINE}"></div>`;
-        // center stub leading to next column
-        inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${mid}px;width:${hx+1}px;height:1px;background:${LINE}"></div>`;
+    // Right-side connector: for each game pair their centers → next round
+    const nextRound = bracketRounds.find(r => r.order === round.order + 1);
+    if (nextRound) {
+      const nextCenters = gameCenters[nextRound.order] || [];
+      // Figure out which pairs of this round's games feed each next-round game
+      if (round.order === 1 && r16Round) {
+        // R32→R16: use r32_src to pair correctly
+        r16Round.games.forEach((r16g, r16i) => {
+          const s0 = r16g.r32_src_0, s1 = r16g.r32_src_1;
+          if (s0 == null || s1 == null) return;
+          const c1 = r32Center(s0), c2 = r32Center(s1);
+          const mid = nextCenters[r16i] ?? (c1 + c2) / 2;
+          const hx = CONN / 2 - 1;
+          inner += `<div style="position:absolute;left:${COL_W}px;top:${Math.round(c1)}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W}px;top:${Math.round(c2)}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${Math.round(Math.min(c1,c2))}px;width:1px;height:${Math.round(Math.abs(c2-c1))}px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${Math.round(mid)}px;width:${hx+1}px;height:1px;background:${LINE}"></div>`;
+        });
+      } else {
+        // R16→QF, QF→SF, SF→Final: sequential pairing
+        for (let i = 0; i < round.games.length; i += 2) {
+          const c1  = centers[i];
+          const c2  = centers[i + 1];
+          if (c1 == null || c2 == null) continue;
+          const mid = nextCenters[Math.floor(i / 2)] ?? (c1 + c2) / 2;
+          const hx  = CONN / 2 - 1;
+          inner += `<div style="position:absolute;left:${COL_W}px;top:${Math.round(c1)}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W}px;top:${Math.round(c2)}px;width:${hx}px;height:1px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${Math.round(c1)}px;width:1px;height:${Math.round(c2-c1)}px;background:${LINE}"></div>`;
+          inner += `<div style="position:absolute;left:${COL_W+hx}px;top:${Math.round(mid)}px;width:${hx+1}px;height:1px;background:${LINE}"></div>`;
+        }
       }
     }
 
@@ -1120,7 +1212,7 @@ async function updateAll() {
     renderPowerRankings(data.live_strengths, data.games_used, data.odds_used);
     renderStandings(data.group_standings);
     renderGroupPoints(data.group_standings, data.players);
-    renderKnockout(data.knockout_games, data.players);
+    renderKnockout(data.knockout_games, data.players, data.sim_probs);
     const oddsNote = data.odds_used > 0 ? ` · DraftKings odds on ${data.odds_used} games` : '';
     document.getElementById('footer').textContent = `Scores from ESPN${oddsNote} · Updated: ${data.updated}`;
   } catch(e) {
@@ -2235,6 +2327,13 @@ def resolve_ko_placeholders(knockout_games, group_standings):
                 return teams[1]
         return display
 
+    # Assign bracket_idx (0-based) to each R32 game so JS can position them
+    for idx, g in enumerate(r32_games_sorted):
+        g['bracket_idx'] = idx   # 0-based position in sorted R32 array
+
+    # Build a reverse map: ESPN 1-based game num → 0-based bracket_idx
+    r32_num_to_bracket_idx = {num: num - 1 for num in range(1, len(r32_games_sorted) + 1)}
+
     # First pass: resolve group placeholders
     for g in knockout_games:
         for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
@@ -2243,27 +2342,39 @@ def resolve_ko_placeholders(knockout_games, group_standings):
                 g[key_d] = resolved
                 g[key_n] = norm(resolved)
 
-    # Second pass: resolve "Round of 32 N Winner" in R16+ games using completed R32 results.
+    # Second pass: resolve "Round of 32 N Winner" in R16+ games.
+    # Also capture r32_src so JS can draw correct bracket connectors.
     for g in knockout_games:
         if g.get('round_order', 0) <= 1:
             continue
+        src_indices = []
         for key_d, key_n in [('team1_display', 'team1'), ('team2_display', 'team2')]:
             disp = g.get(key_d, '')
             m = re.search(r'Round\s+of\s+32\s+(\d+)\s+Winner', disp, re.I)
             if m:
                 game_num = int(m.group(1))
+                src_indices.append(r32_num_to_bracket_idx.get(game_num))
                 if game_num in r32_num_to_winner:
                     g[key_d] = r32_num_to_winner[game_num]
                     g[key_n] = r32_num_to_norm[game_num]
+            else:
+                src_indices.append(None)
+        # Store r32 source bracket indices on R16 games (may be None if already resolved team names)
+        if g.get('round_order') == 2:
+            if src_indices[0] is not None: g['r32_src_0'] = src_indices[0]
+            if src_indices[1] is not None: g['r32_src_1'] = src_indices[1]
 
     return knockout_games
 
 def compute_knockout_pts(knockout_games, roster):
-    """Compute actual knockout points earned per player from completed knockout games."""
+    """Compute actual knockout points earned per player and per team from completed knockout games.
+    Returns (player_total_pts, team_ko_wins) where team_ko_wins maps norm_team →
+    list of {round, pts} dicts for each KO win."""
     player_teams = {p: set(norm(t) for t in teams) for p, teams in roster.items()}
     pts = {p: 0 for p in roster}
+    # team_ko_wins: norm_team → list of {round, pts, round_order}
+    team_ko_wins = {}
 
-    # Group games by round for bonus logic
     by_round = {}
     for g in knockout_games:
         by_round.setdefault(g['round'], []).append(g)
@@ -2273,24 +2384,29 @@ def compute_knockout_pts(knockout_games, roster):
             continue
         w = g['winner']
         rnd = g['round']
+        round_order = g.get('round_order', 0)
+        if rnd == '3rd Place':
+            w_pts = 2
+        elif rnd == 'Final':
+            w_pts = 8   # 4 for win + 4 champion bonus (runner-up +2 handled below)
+        else:
+            w_pts = 4
+
+        team_ko_wins.setdefault(w, []).append({'round': rnd, 'pts': w_pts, 'round_order': round_order})
         for player, teams in player_teams.items():
             if w in teams:
-                if rnd == '3rd Place':
-                    pts[player] += 2      # bronze: +2 not +4
-                elif rnd == 'Final':
-                    pts[player] += 4 + 4  # win + champion bonus
-                else:
-                    pts[player] += 4      # standard round win
+                pts[player] += w_pts
 
     # Runner-up bonus: +2 for final loser
     for g in by_round.get('Final', []):
         if not g['done']: continue
         loser = g['team2'] if g['winner'] == g['team1'] else g['team1']
+        team_ko_wins.setdefault(loser, []).append({'round': 'Final (RU)', 'pts': 2, 'round_order': 6})
         for player, teams in player_teams.items():
             if loser in teams:
                 pts[player] += 2
 
-    return pts
+    return pts, team_ko_wins
 
 # ── Main data function (5-minute server-side cache) ────────────────────────────
 
@@ -2322,11 +2438,13 @@ def get_data():
     # Combine group + knockout scheduled games for odds lookup in simulation.
     all_scheduled = games + [g for g in knockout_games if not g.get('done') and not g.get('live')]
     mc = run_monte_carlo(roster, team_stats, all_done, n=10000, all_games=all_scheduled, knockout_games=knockout_games)
-    ko_pts = compute_knockout_pts(knockout_games, roster)
-    # Add knockout pts to player totals
+    ko_pts, team_ko_wins = compute_knockout_pts(knockout_games, roster)
+    # Add knockout pts to player totals and annotate each team with KO wins
     for p in players:
         p['ko_pts'] = ko_pts.get(p['name'], 0)
         p['total'] += p['ko_pts']
+        for t in p['teams']:
+            t['ko_wins'] = team_ko_wins.get(norm(t['name']), [])
     players.sort(key=lambda x: x['total'], reverse=True)
     result = {
         'players': players,
